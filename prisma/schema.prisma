@@ -1,0 +1,561 @@
+// Dream On Travel — booking platform schema
+//
+// Conventions used throughout:
+//  * All money is stored as INTEGER PAISE. Never floats, never rupees.
+//    ₹28,999.00 -> 2899900. Format for display only, at the edge.
+//  * Every amount on a booking is a SNAPSHOT taken at booking time.
+//    Editing a trip must never retroactively change what someone owes.
+//  * `payments` and `razorpay_events` are append-only. Corrections are new rows.
+//  * Prisma connects as the database owner and therefore BYPASSES RLS.
+//    Authorization is enforced in server code. RLS is enabled with zero
+//    policies purely to stop Supabase's auto-generated PostgREST API from
+//    exposing these tables to anyone holding the public anon key.
+//    See prisma/migrations/*_security_lockdown.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+/// Asked at signup because rooming on a shared trip is allocated by it.
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum TripStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+/// Derived for display from seats + dates. Not authoritative — never gate
+/// a booking on this, always re-check capacity in reserve_seats().
+enum TripAvailability {
+  OPEN
+  FAST_FILLING
+  FEW_SLOTS_LEFT
+  SOLD_OUT
+  CLOSED
+}
+
+enum BookingStatus {
+  /// Seats held, awaiting first payment. Not yet counted in trip.seatsBooked.
+  PENDING_PAYMENT
+  /// No-payment path: recorded, admin will collect manually. Seats ARE counted.
+  REQUESTED
+  /// At least the advance is paid. Seats ARE counted.
+  CONFIRMED
+  CANCELLED
+  REFUNDED
+  /// Hold lapsed before payment. Seats released.
+  EXPIRED
+}
+
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  RAZORPAY
+  UPI_MANUAL
+  CASH
+  BANK_TRANSFER
+  OTHER
+}
+
+enum BookingSource {
+  WEB
+  ADMIN_OFFLINE
+  WHATSAPP
+  FESTIVAL
+}
+
+enum InstalmentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity
+// ─────────────────────────────────────────────────────────────
+
+/// Mirrors auth.users (Supabase-managed). `id` is the auth.users UUID.
+/// No Prisma-level FK: the auth schema is owned by Supabase and must not
+/// be managed by our migrations. The FK is added in raw SQL instead.
+model Profile {
+  id        String   @id @db.Uuid
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  phone     String?
+  avatarUrl String?  @map("avatar_url")
+
+  /// Collected at signup. Nullable because accounts created before these
+  /// existed — and any created by the admin CLI — legitimately have none.
+  /// The signup form requires them; the column can't, without orphaning
+  /// every profile that predates it.
+  city        String?
+  state       String?
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  gender      Gender?
+
+  role      Role     @default(CUSTOMER)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  bookings         Booking[]
+  seatHolds        SeatHold[]
+  reviews          Review[]
+  recordedPayments Payment[]  @relation("RecordedBy")
+  auditEntries     AuditLog[]
+
+  @@index([phone])
+  @@index([role])
+  @@map("profiles")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Trips
+// ─────────────────────────────────────────────────────────────
+
+model Trip {
+  id       String @id @default(uuid()) @db.Uuid
+  slug     String @unique
+  title    String
+  /// Internal label so repeat runs of the same trip can be told apart —
+  /// "Rajasthan 2026 · Batch 1". Admin-only; never rendered publicly.
+  batchName String? @map("batch_name")
+  tagline  String?
+  /// Free-text so the team isn't blocked adding a new destination.
+  destination String?
+  category    String?
+
+  // ── Media (Supabase Storage object paths, not full URLs) ──
+  /// 5:6 portrait, used on the grid poster.
+  cardImage String? @map("card_image")
+  /// 16:9, used on the trip page banner. Deliberately separate from the
+  /// card — auto-cropping one into the other ruins the composition.
+  heroImage String? @map("hero_image")
+  /// string[] of storage paths.
+  gallery   Json?
+
+  // ── Dates & logistics ──
+  startDate    DateTime  @map("start_date") @db.Date
+  endDate      DateTime  @map("end_date") @db.Date
+  durationLabel String?  @map("duration_label")
+  startingFrom String?   @map("starting_from")
+  ageGroup     String?   @map("age_group")
+
+  // ── Capacity ──
+  totalSeats Int @map("total_seats")
+  /// Confirmed/requested seats only. Holds are counted separately from
+  /// seat_holds so an abandoned checkout never permanently burns a seat.
+  /// Maintained exclusively by reserve_seats() / release_seats().
+  seatsBooked Int @default(0) @map("seats_booked")
+  /// Below this by departure, the trip is cancelled and everyone refunded.
+  minParticipants Int @default(1) @map("min_participants")
+
+  // ── Money (paise) ──
+  pricePaise        Int  @map("price_paise")
+  /// Optional strike-through price. DISPLAY ONLY — must never enter a
+  /// calculation. Only pricePaise reaches Razorpay.
+  comparePricePaise Int? @map("compare_price_paise")
+  offerLabel        String? @map("offer_label")
+  offerEndsAt       DateTime? @map("offer_ends_at") @db.Timestamptz(3)
+  advancePaise      Int? @map("advance_paise")
+  gstPercent        Int  @default(5) @map("gst_percent")
+  /// Tax Collected at Source, charged on overseas tour packages in India.
+  /// 0 for domestic trips. Separate from GST: different tax, different rate,
+  /// its own line on the invoice.
+  tcsPercent        Int  @default(0) @map("tcs_percent")
+  /// 0 = full payment upfront. 1 = advance + 1. 2 = advance + 2.
+  instalmentCount   Int  @default(0) @map("instalment_count")
+
+  // ── Behaviour toggles (the per-trip config) ──
+  /// false => booking form records a REQUESTED booking and emails both
+  /// sides instead of opening Razorpay. Same booking row either way.
+  razorpayEnabled   Boolean @default(false) @map("razorpay_enabled")
+  autoCloseWhenFull Boolean @default(true)  @map("auto_close_when_full")
+  showSeatsLeft     Boolean @default(true)  @map("show_seats_left")
+  waitlistEnabled   Boolean @default(false) @map("waitlist_enabled")
+
+  // ── Authored content (Tiptap JSON documents) ──
+  introduction  Json?
+  /// [{ dayNumber, dayLabel, date, title, body: <tiptap doc> }]
+  itinerary     Json?
+  inclusions    Json?
+  exclusions    Json?
+  thingsToKnow  Json? @map("things_to_know")
+  /// [{ label, value }] — the trip "moodboard": a handful of 0-5 ratings
+  /// telling a reader at a glance whether this is a hike or a hammock.
+  /// Free-form labels so a trip can add its own dimension.
+  moodboard     Json?
+  cancellationPolicy Json? @map("cancellation_policy")
+
+  // ── Publishing ──
+  status      TripStatus @default(DRAFT)
+  isFeatured  Boolean    @default(false) @map("is_featured")
+  publishedAt DateTime?  @map("published_at") @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  pricingTiers TripPricingTier[]
+  bookings     Booking[]
+  seatHolds    SeatHold[]
+  reviews      Review[]
+  enquiries    Enquiry[]
+
+  @@index([status, startDate])
+  @@index([category])
+  @@index([isFeatured])
+  @@map("trips")
+}
+
+/// Sharing options (triple/double/single occupancy etc). Optional —
+/// a trip with no tiers just uses Trip.pricePaise.
+model TripPricingTier {
+  id          String  @id @default(uuid()) @db.Uuid
+  tripId      String  @map("trip_id") @db.Uuid
+  label       String
+  description String?
+  pricePaise  Int     @map("price_paise")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  trip     Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([tripId, sortOrder])
+  @@map("trip_pricing_tiers")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Seat holds — the oversell guard
+// ─────────────────────────────────────────────────────────────
+
+/// A short-lived claim on N seats while the customer completes checkout.
+/// Rows are never deleted by the app; expiry is by timestamp so a crashed
+/// reaper can't silently release seats. See reserve_seats() in migrations.
+model SeatHold {
+  id        String   @id @default(uuid()) @db.Uuid
+  tripId    String   @map("trip_id") @db.Uuid
+  profileId String   @map("profile_id") @db.Uuid
+  seats     Int
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  /// Set when the hold converts into a booking.
+  bookingId String?  @unique @map("booking_id") @db.Uuid
+  /// Set when explicitly released (abandoned, failed payment, admin action).
+  releasedAt DateTime? @map("released_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  trip    Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  profile Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  /// Partial index on live holds is added in raw SQL — this covers lookups.
+  @@index([tripId, expiresAt])
+  @@index([profileId])
+  @@map("seat_holds")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bookings
+// ─────────────────────────────────────────────────────────────
+
+model Booking {
+  id        String @id @default(uuid()) @db.Uuid
+  /// Human-facing, quoted on WhatsApp and invoices. e.g. DOT-RJ26-0142
+  reference String @unique
+
+  tripId    String @map("trip_id") @db.Uuid
+  profileId String @map("profile_id") @db.Uuid
+
+  status BookingStatus @default(PENDING_PAYMENT)
+  source BookingSource @default(WEB)
+  seats  Int           @default(1)
+
+  pricingTierId String? @map("pricing_tier_id") @db.Uuid
+
+  // ── Price snapshot. Frozen at creation; trip edits must not touch these. ──
+  unitPricePaise Int @map("unit_price_paise")
+  subtotalPaise  Int @map("subtotal_paise")
+  gstPercent     Int @map("gst_percent")
+  gstPaise       Int @map("gst_paise")
+  /// Snapshot alongside GST. A refund computed months later must use the
+  /// rate that applied at booking, not whatever the trip says today.
+  tcsPercent     Int @default(0) @map("tcs_percent")
+  tcsPaise       Int @default(0) @map("tcs_paise")
+  totalPaise     Int @map("total_paise")
+  /// Sum of CAPTURED payments. Denormalised; only ever written inside the
+  /// same transaction that inserts the payment row.
+  amountPaidPaise Int @default(0) @map("amount_paid_paise")
+  refundedPaise   Int @default(0) @map("refunded_paise")
+
+  /// Mirrors the hold while status is PENDING_PAYMENT.
+  holdExpiresAt DateTime? @map("hold_expires_at") @db.Timestamptz(3)
+
+  confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(3)
+  cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  cancellationReason String?   @map("cancellation_reason")
+  /// Admin-only. Never rendered to the customer.
+  internalNotes      String?   @map("internal_notes")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  trip        Trip               @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  profile     Profile            @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  pricingTier TripPricingTier?   @relation(fields: [pricingTierId], references: [id], onDelete: SetNull)
+  travellers  BookingTraveller[]
+  instalments BookingInstalment[]
+  payments    Payment[]
+  seatHold    SeatHold?
+  emails      EmailLog[]
+
+  @@index([tripId, status])
+  @@index([profileId, createdAt])
+  @@index([status, holdExpiresAt])
+  @@index([createdAt])
+  @@map("bookings")
+}
+
+/// One row per person travelling. seats == travellers.length is enforced
+/// in application code at confirmation time.
+model BookingTraveller {
+  id        String @id @default(uuid()) @db.Uuid
+  bookingId String @map("booking_id") @db.Uuid
+
+  fullName    String    @map("full_name")
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  gender      String?
+  phone       String?
+  email       String?
+  emergencyContactName  String? @map("emergency_contact_name")
+  emergencyContactPhone String? @map("emergency_contact_phone")
+  /// Free text — Aadhaar/passport/etc. Store the type, and only the last
+  /// digits of the number if the team insists on capturing it at all.
+  idType   String? @map("id_type")
+  idNumber String? @map("id_number")
+
+  /// Set when the seat is cancelled. The row is kept rather than deleted so
+  /// the booking still shows who was originally travelling, and so a cancelled
+  /// seat can be told apart from one that was never entered.
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_travellers")
+}
+
+/// The payment schedule, SNAPSHOT onto the booking at creation.
+/// Deliberately not derived from the trip at read time: changing a trip's
+/// instalment plan in September must not silently re-bill an August booking.
+model BookingInstalment {
+  id        String @id @default(uuid()) @db.Uuid
+  bookingId String @map("booking_id") @db.Uuid
+
+  sequence   Int
+  label      String
+  amountPaise Int      @map("amount_paise")
+  dueDate    DateTime  @map("due_date") @db.Date
+  status     InstalmentStatus @default(PENDING)
+  paidAt     DateTime? @map("paid_at") @db.Timestamptz(3)
+  /// Last reminder sent, so the cron doesn't nag daily.
+  lastRemindedAt DateTime? @map("last_reminded_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  booking  Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@unique([bookingId, sequence])
+  @@index([status, dueDate])
+  @@map("booking_instalments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Money in / money out — APPEND ONLY
+// ─────────────────────────────────────────────────────────────
+
+model Payment {
+  id           String  @id @default(uuid()) @db.Uuid
+  bookingId    String  @map("booking_id") @db.Uuid
+  instalmentId String? @map("instalment_id") @db.Uuid
+
+  method PaymentMethod
+  status PaymentStatus @default(CREATED)
+  /// Always positive. Refunds are tracked via refundedPaise + status.
+  amountPaise Int    @map("amount_paise")
+  currency    String @default("INR")
+
+  // ── Razorpay correlation ──
+  razorpayOrderId   String? @unique @map("razorpay_order_id")
+  razorpayPaymentId String? @unique @map("razorpay_payment_id")
+  razorpayRefundId  String? @map("razorpay_refund_id")
+  /// Verified server-side before a payment is ever marked CAPTURED.
+  signatureVerified Boolean @default(false) @map("signature_verified")
+
+  // ── Offline payments (festival stall, UPI screenshot, cash) ──
+  recordedByProfileId String? @map("recorded_by_profile_id") @db.Uuid
+  /// UTR / reference number the admin typed in.
+  externalReference   String? @map("external_reference")
+  notes               String?
+
+  failureReason String?   @map("failure_reason")
+  capturedAt    DateTime? @map("captured_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  booking    Booking            @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  instalment BookingInstalment? @relation(fields: [instalmentId], references: [id], onDelete: SetNull)
+  recordedBy Profile?           @relation("RecordedBy", fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, createdAt])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+/// Raw webhook receipts. The unique eventId is what makes webhook handling
+/// idempotent — Razorpay retries, and retries must not double-credit.
+model RazorpayEvent {
+  id        String @id @default(uuid()) @db.Uuid
+  /// x-razorpay-event-id header.
+  eventId   String @unique @map("event_id")
+  event     String
+  payload   Json
+  signatureVerified Boolean @default(false) @map("signature_verified")
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+  processingError String? @map("processing_error")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([event, createdAt])
+  @@index([processedAt])
+  @@map("razorpay_events")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Content & ops
+// ─────────────────────────────────────────────────────────────
+
+model Review {
+  id        String  @id @default(uuid()) @db.Uuid
+  tripId    String? @map("trip_id") @db.Uuid
+  profileId String? @map("profile_id") @db.Uuid
+
+  authorName   String  @map("author_name")
+  authorAvatar String? @map("author_avatar")
+  rating       Int
+  body         String
+  /// Trip title frozen in, so an archived trip still reads correctly.
+  tripTitleSnapshot String? @map("trip_title_snapshot")
+  travelledOn       DateTime? @map("travelled_on") @db.Date
+
+  /// True only when linked to a real CONFIRMED booking.
+  isVerified  Boolean @default(false) @map("is_verified")
+  isPublished Boolean @default(false) @map("is_published")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  trip    Trip?    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([isPublished, sortOrder])
+  @@index([tripId])
+  @@map("reviews")
+}
+
+model Enquiry {
+  id      String  @id @default(uuid()) @db.Uuid
+  tripId  String? @map("trip_id") @db.Uuid
+  name    String
+  email   String?
+  phone   String?
+  message String?
+  status  String  @default("NEW")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  trip Trip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("enquiries")
+}
+
+/// Outbox. dedupeKey is what stops a webhook retry sending three
+/// confirmation emails for one payment.
+model EmailLog {
+  id        String  @id @default(uuid()) @db.Uuid
+  bookingId String? @map("booking_id") @db.Uuid
+
+  toEmail   String  @map("to_email")
+  template  String
+  subject   String
+  dedupeKey String? @unique @map("dedupe_key")
+
+  status     EmailStatus @default(QUEUED)
+  providerId String?     @map("provider_id")
+  error      String?
+  sentAt     DateTime?   @map("sent_at") @db.Timestamptz(3)
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([bookingId])
+  @@map("email_log")
+}
+
+model AuditLog {
+  id             String  @id @default(uuid()) @db.Uuid
+  actorProfileId String? @map("actor_profile_id") @db.Uuid
+  action         String
+  entity         String
+  entityId       String? @map("entity_id")
+  before         Json?
+  after          Json?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor Profile? @relation(fields: [actorProfileId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+/// Single-row key/value for things the founders can change without a deploy.
+model SiteSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("site_settings")
+}

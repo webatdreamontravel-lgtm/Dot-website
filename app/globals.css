@@ -1,0 +1,212 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #0f1e3d;
+  --color-navy-deep: #0a162d;
+  --color-cream: #fef9e7;
+  --color-cream-soft: #fbf3d4;
+  --color-teal: #1d8a8a;
+  --color-teal-bright: #25b0b0;
+  --color-yellow: #f4c542;
+  --color-coral: #ff6b6b;
+  --color-fg: #0f1e3d;
+  --color-bg: #fef9e7;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-script: var(--font-caveat), cursive;
+}
+
+:root {
+  color-scheme: light;
+  --background: var(--color-cream);
+  --foreground: var(--color-navy);
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  background: var(--color-cream);
+  color: var(--color-navy);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+
+/* Hide scrollbars on horizontal scrollers (kept native for accessibility) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Grain overlay used by GrainOverlay component */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/></svg>");
+}
+
+/* Animated gradient mesh for hero */
+.mesh-gradient {
+  background:
+    radial-gradient(60% 60% at 20% 20%, rgba(29, 138, 138, 0.45) 0%, transparent 60%),
+    radial-gradient(50% 50% at 80% 30%, rgba(244, 197, 66, 0.22) 0%, transparent 60%),
+    radial-gradient(70% 70% at 70% 90%, rgba(255, 107, 107, 0.25) 0%, transparent 60%),
+    radial-gradient(40% 40% at 30% 80%, rgba(37, 176, 176, 0.35) 0%, transparent 60%),
+    linear-gradient(180deg, #0a162d 0%, #0f1e3d 60%, #0a162d 100%);
+  background-size: 200% 200%, 180% 180%, 220% 220%, 200% 200%, 100% 100%;
+  animation: meshShift 18s ease-in-out infinite alternate;
+}
+
+@keyframes meshShift {
+  0% { background-position: 0% 0%, 100% 0%, 100% 100%, 0% 100%, 0 0; }
+  100% { background-position: 30% 30%, 70% 30%, 70% 70%, 30% 70%, 0 0; }
+}
+
+/* Marquee */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: marquee 38s linear infinite;
+  width: max-content;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-teal);
+  color: var(--color-cream);
+}
+
+/* Buttons base */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.875rem 1.5rem;
+  border-radius: 999px;
+  font-weight: 500;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background 200ms ease,
+              color 200ms ease,
+              box-shadow 200ms ease;
+  will-change: transform;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn-primary {
+  background: var(--color-teal);
+  color: var(--color-cream);
+  box-shadow: 0 8px 24px -8px rgba(29, 138, 138, 0.6);
+}
+.btn-primary:hover { background: var(--color-teal-bright); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-cream);
+  border: 1px solid rgba(254, 249, 231, 0.3);
+}
+.btn-ghost:hover { background: rgba(254, 249, 231, 0.08); border-color: rgba(254, 249, 231, 0.6); }
+
+.btn-yellow {
+  background: var(--color-yellow);
+  color: var(--color-navy);
+  box-shadow: 0 8px 24px -8px rgba(244, 197, 66, 0.6);
+}
+
+.btn-cream {
+  background: var(--color-cream);
+  color: var(--color-navy);
+}
+.btn-cream:hover { background: white; }
+
+/* Pill */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* Pulse dot for "fast filling" badges */
+.pulse-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: currentColor;
+  animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes ping {
+  0% { transform: scale(1); opacity: 0.7; }
+  80%, 100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* Headings */
+.font-display { font-family: var(--font-display); }
+.font-script { font-family: var(--font-script); }
+
+/* Custom focus ring */
+*:focus-visible {
+  outline: 2px solid var(--color-teal-bright);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Admin rich-text editor content ──
+   Scoped to the editor so it can't leak into the marketing pages. */
+.prose-admin .ProseMirror { outline: none; min-height: 100%; }
+.prose-admin .ProseMirror > * + * { margin-top: 0.7em; }
+.prose-admin .ProseMirror h2 { font-family: var(--font-display); font-size: 1.3rem; font-weight: 600; letter-spacing: -0.015em; margin-top: 1.1em; }
+.prose-admin .ProseMirror h3 { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; margin-top: 1em; }
+.prose-admin .ProseMirror h4 { font-size: 0.98rem; font-weight: 600; margin-top: 0.9em; }
+.prose-admin .ProseMirror ul,
+.prose-admin .ProseMirror ol { padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.prose-admin .ProseMirror ul { list-style: disc; }
+.prose-admin .ProseMirror ol { list-style: decimal; }
+.prose-admin .ProseMirror li::marker { color: var(--color-teal); }
+.prose-admin .ProseMirror blockquote { border-left: 2px solid var(--color-teal); padding-left: 0.9rem; color: #5a6785; font-style: italic; }
+.prose-admin .ProseMirror strong { font-weight: 650; }
+/* Placeholder for a genuinely empty editor. */
+.prose-admin .ProseMirror p.is-editor-empty:first-child::before {
+  content: "Start writing…"; color: #8b96ad; float: left; height: 0; pointer-events: none;
+}
