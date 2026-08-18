@@ -3,7 +3,7 @@ import { Footer } from "@/components/layout/Footer";
 import { Hero } from "@/components/sections/Hero";
 import { UpcomingTrips } from "@/components/sections/UpcomingTrips";
 import { Testimonials } from "@/components/sections/Testimonials";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { siteUrl } from "@/lib/siteUrl";
 import { getPublishedReviews } from "@/lib/queries/reviews";
 import { getUpcomingTrips } from "@/lib/queries/trips";
 
@@ -29,7 +29,7 @@ export default async function HomePage() {
         "@type": "TouristTrip",
         name: trip.title,
         description: trip.tagline ?? undefined,
-        url: `${siteConfig.url}/trips/${trip.slug}`,
+        url: `${siteUrl()}/trips/${trip.slug}`,
         image: trip.heroImage ?? undefined,
         touristType: "Group travel",
       },

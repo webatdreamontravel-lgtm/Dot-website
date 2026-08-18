@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { fraunces, inter, caveat } from "@/lib/fonts";
 import { siteConfig } from "@/lib/data/siteConfig";
+import { siteUrl } from "@/lib/siteUrl";
 import { CursorFollower } from "@/components/shared/CursorFollower";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(siteConfig.url),
+  metadataBase: new URL(siteUrl()),
   title: {
     default: `${siteConfig.name} — ${siteConfig.tagline}`,
     template: `%s | ${siteConfig.name}`,
@@ -27,7 +28,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_IN",
-    url: siteConfig.url,
+    url: siteUrl(),
     siteName: siteConfig.name,
     title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
@@ -63,8 +64,8 @@ export default function RootLayout({
     "@context": "https://schema.org",
     "@type": "TravelAgency",
     name: siteConfig.name,
-    url: siteConfig.url,
-    logo: `${siteConfig.url}/favicon.ico`,
+    url: siteUrl(),
+    logo: `${siteUrl()}/favicon.ico`,
     description: siteConfig.description,
     email: siteConfig.email,
     telephone: siteConfig.phone,

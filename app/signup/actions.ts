@@ -10,7 +10,7 @@ import { verificationEmail } from "@/lib/email/templates";
 import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { siteUrl } from "@/lib/siteUrl";
 
 export type SignupState = {
   status: "idle" | "sent" | "error";
@@ -335,11 +335,10 @@ async function deliver({
   hashedToken: string;
   code: string;
 }) {
-  // NEXT_PUBLIC_SITE_URL, not siteConfig.url: the latter is the production
-  // domain, so a link built from it during local development points at a
-  // site that doesn't exist yet.
-  const origin = process.env.NEXT_PUBLIC_SITE_URL || siteConfig.url;
-  const confirmUrl = new URL("/auth/confirm", origin);
+  // Resolved from the running deployment rather than hardcoded, so a link
+  // emailed from staging opens staging and one from production opens
+  // production, with no env var to remember.
+  const confirmUrl = new URL("/auth/confirm", siteUrl());
   confirmUrl.searchParams.set("token_hash", hashedToken);
   confirmUrl.searchParams.set("type", "email");
   if (nextPath) confirmUrl.searchParams.set("next", nextPath);

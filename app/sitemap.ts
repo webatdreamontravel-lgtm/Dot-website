@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 import { getPublishedTripSlugs } from "@/lib/queries/trips";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { siteUrl } from "@/lib/siteUrl";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
@@ -19,7 +19,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
 
   const staticEntries: MetadataRoute.Sitemap = staticPaths.map((p) => ({
-    url: `${siteConfig.url}${p}`,
+    url: `${siteUrl()}${p}`,
     lastModified: now,
     changeFrequency: p === "" ? "weekly" : "monthly",
     priority: p === "" ? 1.0 : 0.7,
@@ -27,7 +27,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const slugs = await getPublishedTripSlugs();
   const tripEntries: MetadataRoute.Sitemap = slugs.map((slug) => ({
-    url: `${siteConfig.url}/trips/${slug}`,
+    url: `${siteUrl()}/trips/${slug}`,
     lastModified: now,
     changeFrequency: "weekly",
     priority: 0.9,
