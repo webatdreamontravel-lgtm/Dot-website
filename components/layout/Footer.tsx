@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { Instagram, Mail, MapPin, Phone } from "lucide-react";
+import { Instagram, Mail, MapPin, Phone, ShieldCheck } from "lucide-react";
 import { Logo } from "@/components/shared/Logo";
 import { WhatsAppIcon } from "@/components/layout/Navbar";
-import { navLinks, policyLinks, siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, navLinks, policyLinks, siteConfig } from "@/lib/data/siteConfig";
 
 export function Footer() {
   return (
@@ -90,10 +90,35 @@ export function Footer() {
           </ul>
         </div>
 
-        <div className="mt-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4 text-xs text-cream/55">
-          <p>
-            © {new Date().getFullYear()} {siteConfig.name}. All rights reserved.
+        {/* Payment disclosure. A gateway's review team looks for this, and so
+            does anyone deciding whether it's safe to type a card number into
+            a site they found on Instagram. */}
+        <div className="mt-10 flex flex-col gap-4 border-t border-cream/15 pt-8 md:flex-row md:items-center md:justify-between">
+          <p className="flex items-center gap-2 text-xs text-cream/60">
+            <ShieldCheck className="h-4 w-4 flex-shrink-0 text-yellow" aria-hidden />
+            Payments secured by Razorpay · UPI, Cards, Net Banking &amp; EMI · All prices in INR (₹)
           </p>
+          <p className="text-xs text-cream/50">
+            We never see or store your card details.
+          </p>
+        </div>
+
+        <div className="mt-8 flex flex-col md:flex-row md:items-start md:justify-between gap-4 text-xs text-cream/55">
+          <div className="space-y-1">
+            <p>
+              © {new Date().getFullYear()} {legalConfig.registeredName}. All rights reserved.
+            </p>
+            {/* Only worth saying when the two actually differ — otherwise it
+                reads "X is a trading name of X". */}
+            {(legalConfig.registeredName !== siteConfig.name || legalConfig.gstin) && (
+              <p className="text-cream/40">
+                {legalConfig.registeredName !== siteConfig.name &&
+                  `${siteConfig.name} is a trading name of ${legalConfig.registeredName}`}
+                {legalConfig.registeredName !== siteConfig.name && legalConfig.gstin && " · "}
+                {legalConfig.gstin && `GSTIN ${legalConfig.gstin}`}
+              </p>
+            )}
+          </div>
           <p className="font-script text-base text-cream/70">
             Made with chai &amp; chaos in Coimbatore.
           </p>

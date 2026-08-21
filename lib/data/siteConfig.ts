@@ -23,6 +23,52 @@ export const siteConfig = {
   established: 2023,
 };
 
+/**
+ * The details a payment gateway checks before it will let us take money.
+ *
+ * Razorpay's activation review compares the website against the application
+ * form line by line. The registered name here MUST be the entity on the
+ * application — the brand name "Dream On Travel" is what customers see, but
+ * a proprietorship or LLP is what actually holds the bank account, and a
+ * mismatch between the two is the most common reason a travel merchant gets
+ * sent back for clarification.
+ *
+ * Anything still null is rendered nowhere. That is deliberate: an invented
+ * GSTIN on a page a payment gateway is auditing is far worse than a missing
+ * one, and a wrong number would have to be corrected under their nose.
+ */
+export const legalConfig = {
+  /**
+   * Registered/legal entity name. Must match the PAN and bank account given
+   * to Razorpay. Falls back to the brand name so the pages still read, but
+   * this needs confirming with Priya & Santhosh before submission.
+   */
+  registeredName: "Dream On Travel",
+  /** "Proprietorship" | "Partnership" | "LLP" | "Private Limited" | ... */
+  entityType: "Proprietorship" as string | null,
+  /** 15-character GSTIN. Required, since every trip is priced with 5% GST. */
+  gstin: null as string | null,
+  /** Business PAN. Displayed only if the founders want it public. */
+  pan: null as string | null,
+  /** Tour operator / IATA / state tourism registration, if held. */
+  registrationNumber: null as string | null,
+  /**
+   * Street address for the Contact Us page. Razorpay wants a complete,
+   * verifiable address — not just a city — so line1 must be a real door
+   * number and street before this goes in for review.
+   */
+  addressLines: [
+    // Door number and street go here. The city, state, pincode and country
+    // are appended from siteConfig.address, so don't repeat them.
+    "Dream On Travel",
+  ] as string[],
+  /** Named person accountable for grievances, per the IT Rules 2021. */
+  grievanceOfficer: {
+    name: "Santhosh",
+    designation: "Grievance Officer",
+  },
+} as const;
+
 export const navLinks = [
   { href: "/trips", label: "Trips" },
   { href: "/past-journeys", label: "Past Journeys" },

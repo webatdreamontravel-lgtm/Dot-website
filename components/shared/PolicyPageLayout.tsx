@@ -13,7 +13,7 @@ type PolicyPageLayoutProps = {
 export function PolicyPageLayout({
   title,
   kicker = "Policy",
-  lastUpdated = "April 2026",
+  lastUpdated = "August 2026",
   children,
 }: PolicyPageLayoutProps) {
   return (
