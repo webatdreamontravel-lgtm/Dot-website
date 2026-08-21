@@ -116,7 +116,7 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
           </div>
         </dl>
 
-        {price.advanceDuePaise > 0 && (
+        {price.advanceDuePaise > 0 ? (
           <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
             <strong className="text-navy">
               Pay {formatINR(toRupees(price.advanceDuePaise))} now
@@ -124,6 +124,12 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
             to confirm your seat. The balance of{" "}
             {formatINR(toRupees(price.balancePaise))}{" "}
             is due before departure — we&apos;ll tell you the exact date when you book.
+          </p>
+        ) : (
+          <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
+            <strong className="text-navy">Nothing is charged online.</strong> Book your seat
+            and our team calls you within one working day to confirm the trip and arrange
+            payment.
           </p>
         )}
 
