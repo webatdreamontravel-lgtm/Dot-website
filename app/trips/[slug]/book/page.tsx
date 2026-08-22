@@ -9,7 +9,7 @@ import { getSessionProfile } from "@/lib/auth";
 import { getBookableTrip, type BookableTrip } from "@/lib/queries/booking";
 import { computePricing, toRupees } from "@/lib/booking/pricing";
 import { formatINR } from "@/lib/utils";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 import { BookingForm } from "./BookingForm";
 
 type Params = { params: Promise<{ slug: string }> };
@@ -119,10 +119,14 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
         {price.advanceDuePaise > 0 ? (
           <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
             <strong className="text-navy">
-              Pay {formatINR(toRupees(price.advanceDuePaise))} now
+              {paymentsConfig.gatewayLive
+                ? `Pay ${formatINR(toRupees(price.advanceDuePaise))} now`
+                : `An advance of ${formatINR(toRupees(price.advanceDuePaise))} confirms your seat`}
             </strong>{" "}
-            to confirm your seat. The balance of{" "}
-            {formatINR(toRupees(price.balancePaise))}{" "}
+            {paymentsConfig.gatewayLive
+              ? "to confirm your seat."
+              : "— the team will collect it directly once you book; nothing is charged on this site."}{" "}
+            The balance of {formatINR(toRupees(price.balancePaise))}{" "}
             is due before departure — we&apos;ll tell you the exact date when you book.
           </p>
         ) : (
@@ -168,7 +172,9 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
 
         <p className="mt-5 flex items-start gap-2 text-[0.8rem] leading-relaxed text-cream/55">
           <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden />
-          Payments are processed by Razorpay. We never see or store your card details.
+          {paymentsConfig.gatewayLive
+            ? `Payments are processed by ${paymentsConfig.gatewayName}. We never see or store your card details.`
+            : "No card or bank details are collected on this site. The team arranges payment with you directly."}
         </p>
 
         <hr className="my-5 border-cream/15" />

@@ -367,12 +367,14 @@ export function TripForm({
             <div>
               <b className="block text-[0.89rem] font-semibold">Status</b>
               <small className="mt-0.5 block text-[0.8rem] text-[#8b96ad]">
-                This is what controls visibility. Drafts are invisible on the site; publishing puts the trip on the homepage and makes it bookable.
+                This is what controls visibility. An inactive trip is invisible on the site;
+                activating puts it on the homepage and makes it bookable. You can also flip this
+                from the trips list.
               </small>
             </div>
             <select name="status" defaultValue={values.status ?? "DRAFT"} className={cn(input, "w-auto")}>
-              <option value="DRAFT">Draft</option>
-              <option value="PUBLISHED">Published — live on the site</option>
+              <option value="DRAFT">Inactive — not on the site</option>
+              <option value="PUBLISHED">Active — live on the site</option>
               <option value="ARCHIVED">Archived</option>
             </select>
           </div>

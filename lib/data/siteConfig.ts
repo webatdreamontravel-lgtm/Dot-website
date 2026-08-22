@@ -12,11 +12,12 @@ export const siteConfig = {
   instagram: "https://www.instagram.com/dream_on_travel_",
   instagramHandle: "@dream_on_travel_",
   address: {
-    line1: "Dream On Travel",
-    line2: "Coimbatore",
+    // Principal place of business, per the GST REG-06 certificate.
+    line1: "50, Valluvar Street",
+    line2: "Dr Sivanandha Colony",
     city: "Coimbatore",
     state: "Tamil Nadu",
-    pincode: "641001",
+    pincode: "641012",
     country: "India",
   },
   businessHours: "Monday to Saturday, 10 AM - 7 PM IST",
@@ -44,10 +45,24 @@ export const legalConfig = {
    * this needs confirming with Priya & Santhosh before submission.
    */
   registeredName: "Dream On Travel",
-  /** "Proprietorship" | "Partnership" | "LLP" | "Private Limited" | ... */
-  entityType: "Proprietorship" as string | null,
-  /** 15-character GSTIN. Required, since every trip is priced with 5% GST. */
-  gstin: null as string | null,
+  /**
+   * Per the GST registration certificate: Constitution of Business =
+   * Partnership. It was guessed as "Proprietorship" before the certificate
+   * was to hand — worth knowing, because the partnership deed rather than a
+   * single PAN is what Razorpay will ask to see.
+   */
+  entityType: "Partnership" as string | null,
+  /**
+   * GSTIN from the GST REG-06 certificate. Every trip is priced with 5% GST,
+   * so this needs to be on the site.
+   *
+   * Verified rather than transcribed: state code 33 (Tamil Nadu) matches the
+   * registered address, the embedded PAN AAWFD0567F is well-formed with 'F'
+   * in the 4th position for a partnership firm — which agrees with the
+   * certificate's Constitution of Business — and the trailing 'C' matches
+   * the GSTN mod-36 check digit computed over the first 14 characters.
+   */
+  gstin: "33AAWFD0567F1ZC" as string | null,
   /** Business PAN. Displayed only if the founders want it public. */
   pan: null as string | null,
   /** Tour operator / IATA / state tourism registration, if held. */
@@ -58,15 +73,40 @@ export const legalConfig = {
    * number and street before this goes in for review.
    */
   addressLines: [
-    // Door number and street go here. The city, state, pincode and country
-    // are appended from siteConfig.address, so don't repeat them.
-    "Dream On Travel",
+    // Derived, not restated. The street lives in siteConfig.address, and
+    // Razorpay compares the address wherever it appears on the site against
+    // the application form — so there must be exactly one copy of it to
+    // change. City, state, pincode and country are appended at render time.
+    siteConfig.address.line1,
+    siteConfig.address.line2,
   ] as string[],
   /** Named person accountable for grievances, per the IT Rules 2021. */
   grievanceOfficer: {
     name: "Santhosh",
     designation: "Grievance Officer",
   },
+} as const;
+
+/**
+ * How money is actually collected, today.
+ *
+ * `gatewayLive` is false until a payment aggregator has actually approved
+ * the account and the integration is switched on. Every page that talks
+ * about payment branches on it, so the site describes what really happens
+ * rather than what we hope will happen shortly.
+ *
+ * This matters beyond tidiness: telling customers "payments secured by
+ * Razorpay" while holding no merchant account is a claim we can't stand
+ * behind, it uses their name outside their brand terms, and it is a poor
+ * look on the very site their review team is reading. Flip the flag on
+ * approval day and the copy switches to the present tense everywhere.
+ */
+export const paymentsConfig = {
+  gatewayLive: false,
+  gatewayName: "Razorpay",
+  gatewayLegalName: "Razorpay Software Private Limited",
+  /** What the team can actually take right now. */
+  offlineMethods: "UPI, bank transfer or cash",
 } as const;
 
 export const navLinks = [

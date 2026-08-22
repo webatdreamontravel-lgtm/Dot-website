@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { legalConfig, siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Terms & Conditions",
@@ -53,16 +53,26 @@ export default function TermsPage() {
       </ul>
 
       <h2>5. Payment processing</h2>
+      {paymentsConfig.gatewayLive ? (
+        <p>
+          Online payments are collected through <strong>{paymentsConfig.gatewayLegalName}</strong>, a
+          payment aggregator authorised by the Reserve Bank of India. Card, UPI and net-banking details
+          are entered on the aggregator&apos;s PCI-DSS compliant infrastructure and are never seen,
+          transmitted or stored by {siteConfig.name}. We retain only the transaction reference and the
+          amount, which we need in order to reconcile your booking and process any refund.
+        </p>
+      ) : (
+        <p>
+          This website does not currently take payment online. Booking a seat records your request and
+          holds it; a member of our team then contacts you to confirm the trip and arrange payment by{" "}
+          {paymentsConfig.offlineMethods}. <strong>No card, UPI or bank credentials are ever entered on
+          this site</strong>, and we do not ask for them by email.
+        </p>
+      )}
       <p>
-        Online payments are collected through <strong>Razorpay Software Private Limited</strong>, a
-        payment aggregator authorised by the Reserve Bank of India. Card, UPI and net-banking details are
-        entered on Razorpay&apos;s PCI-DSS compliant infrastructure and are never seen, transmitted or
-        stored by {siteConfig.name}. We retain only the transaction reference and the amount, which we
-        need in order to reconcile your booking and process any refund.
-      </p>
-      <p>
-        We may also accept payment offline — by UPI transfer, bank transfer or cash at a travel festival
-        stall. Offline payments are recorded against the same booking and receipted the same way.
+        When online payment is introduced, it will be handled by a payment aggregator authorised by the
+        Reserve Bank of India on PCI-DSS compliant infrastructure, and these Terms will be updated before
+        it goes live. {siteConfig.name} will not store card or banking credentials at any point.
       </p>
 
       <h2>6. Trip conduct</h2>

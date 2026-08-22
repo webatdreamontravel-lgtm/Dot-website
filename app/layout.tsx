@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { fraunces, inter, caveat } from "@/lib/fonts";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, siteConfig } from "@/lib/data/siteConfig";
 import { siteUrl } from "@/lib/siteUrl";
 import { CursorFollower } from "@/components/shared/CursorFollower";
 import "./globals.css";
@@ -64,6 +64,7 @@ export default function RootLayout({
     "@context": "https://schema.org",
     "@type": "TravelAgency",
     name: siteConfig.name,
+    legalName: legalConfig.registeredName,
     url: siteUrl(),
     logo: `${siteUrl()}/favicon.ico`,
     description: siteConfig.description,
@@ -72,13 +73,15 @@ export default function RootLayout({
     foundingDate: `${siteConfig.established}-01-01`,
     address: {
       "@type": "PostalAddress",
-      streetAddress: siteConfig.address.line1,
+      streetAddress: legalConfig.addressLines.join(", "),
       addressLocality: siteConfig.address.city,
       addressRegion: siteConfig.address.state,
       postalCode: siteConfig.address.pincode,
       addressCountry: "IN",
     },
     sameAs: [siteConfig.instagram],
+    priceRange: "₹₹",
+    ...(legalConfig.gstin ? { taxID: legalConfig.gstin } : {}),
   };
 
   return (

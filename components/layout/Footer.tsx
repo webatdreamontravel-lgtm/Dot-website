@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Instagram, Mail, MapPin, Phone, ShieldCheck } from "lucide-react";
 import { Logo } from "@/components/shared/Logo";
 import { WhatsAppIcon } from "@/components/layout/Navbar";
-import { legalConfig, navLinks, policyLinks, siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, navLinks, paymentsConfig, policyLinks, siteConfig } from "@/lib/data/siteConfig";
 
 export function Footer() {
   return (
@@ -55,10 +55,15 @@ export function Footer() {
             <ul className="mt-4 space-y-3 text-cream/85">
               <li className="flex items-start gap-3">
                 <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-yellow" />
+                {/* Same source as the Contact Us page. Razorpay compares the
+                    address across the site against the application form, so
+                    the two must not be able to drift apart. */}
                 <span>
-                  {siteConfig.address.line1}, {siteConfig.address.city},
+                  {legalConfig.addressLines.join(", ")}
                   <br />
-                  {siteConfig.address.state} - {siteConfig.address.pincode}, {siteConfig.address.country}
+                  {siteConfig.address.city}, {siteConfig.address.state} - {siteConfig.address.pincode}
+                  <br />
+                  {siteConfig.address.country}
                 </span>
               </li>
               <li className="flex items-center gap-3">
@@ -96,10 +101,14 @@ export function Footer() {
         <div className="mt-10 flex flex-col gap-4 border-t border-cream/15 pt-8 md:flex-row md:items-center md:justify-between">
           <p className="flex items-center gap-2 text-xs text-cream/60">
             <ShieldCheck className="h-4 w-4 flex-shrink-0 text-yellow" aria-hidden />
-            Payments secured by Razorpay · UPI, Cards, Net Banking &amp; EMI · All prices in INR (₹)
+            {paymentsConfig.gatewayLive
+              ? `Payments secured by ${paymentsConfig.gatewayName} · UPI, Cards, Net Banking & EMI · All prices in INR (₹)`
+              : `All prices in INR (₹) · ${paymentsConfig.offlineMethods} · GST invoice on every booking`}
           </p>
           <p className="text-xs text-cream/50">
-            We never see or store your card details.
+            {paymentsConfig.gatewayLive
+              ? "We never see or store your card details."
+              : "No card details are collected on this site."}
           </p>
         </div>
 

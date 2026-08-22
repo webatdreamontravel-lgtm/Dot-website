@@ -87,8 +87,8 @@ export default async function AdminTripsPage({ searchParams }: { searchParams: S
               value={filters.status}
               placeholder="Any status"
               options={[
-                { value: "PUBLISHED", label: "Live" },
-                { value: "DRAFT", label: "Draft" },
+                { value: "PUBLISHED", label: "Active — on the site" },
+                { value: "DRAFT", label: "Inactive — not on the site" },
                 { value: "ARCHIVED", label: "Archived" },
               ]}
             />

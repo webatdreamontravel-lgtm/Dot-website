@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { legalConfig, siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Contact Us",
@@ -89,8 +89,18 @@ export default function ContactUsPage() {
       </p>
 
       <h2>Payment-related queries</h2>
+      {paymentsConfig.gatewayLive ? (
+        <p>
+          Payments on this website are processed by <strong>{paymentsConfig.gatewayLegalName}</strong>. For a failed payment, a duplicate charge, or a refund that has not reached your account within the timeline set out in our <a href="/cancellation-and-refund-policy">Cancellation &amp; Refund Policy</a>, write to <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with your booking reference and the transaction ID. We take these up with the gateway on your behalf — you should not have to chase them yourself.
+        </p>
+      ) : (
+        <p>
+          This website does not take payment online. Payment is arranged directly with our team by{" "}
+          {paymentsConfig.offlineMethods} after you book. For a payment we haven&apos;t acknowledged, or a refund that hasn&apos;t reached you within the timeline set out in our <a href="/cancellation-and-refund-policy">Cancellation &amp; Refund Policy</a>, write to <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with your booking reference and the UTR or transaction reference.
+        </p>
+      )}
       <p>
-        Payments on this website are processed by <strong>Razorpay Software Private Limited</strong>. For a failed payment, a duplicate charge, or a refund that has not reached your account within the timeline set out in our <a href="/cancellation-and-refund-policy">Cancellation &amp; Refund Policy</a>, write to <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with your booking reference and the transaction ID. We take these up with the gateway on your behalf — you should not have to chase them yourself.
+        <strong>A safety note:</strong> we will never ask for your card number, CVV, UPI PIN, OTP or net-banking password — not by email, not on a call, not on WhatsApp. If anyone claiming to be from {siteConfig.name} asks for these, it is not us. Please report it to the number above.
       </p>
     </PolicyPageLayout>
   );

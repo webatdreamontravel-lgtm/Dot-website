@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Image from "next/image";
+// import Image from "next/image"; // restore with the team section below
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
@@ -20,23 +20,22 @@ const values = [
   { title: "Honest pricing", body: "What you pay is what you get. No surprise add-ons on Day 2." },
 ];
 
-const team = [
-  {
-    name: "Ajay Murugan",
-    role: "Founder & Chief Trip Lead",
-    avatar: "https://i.pravatar.cc/300?img=12",
-  },
-  {
-    name: "Priya Devi",
-    role: "Operations & Stays",
-    avatar: "https://i.pravatar.cc/300?img=49",
-  },
-  {
-    name: "Karthik R.",
-    role: "Routes & Recces",
-    avatar: "https://i.pravatar.cc/300?img=33",
-  },
-];
+/*
+ * Commented out rather than deleted, pending real names and real photos.
+ *
+ * The names were placeholders and the faces were pravatar.cc stock — three
+ * strangers presented as the founding team. On a site being read by a
+ * payment gateway's review team, invented people are exactly the signal
+ * that gets a travel merchant a second look, and it isn't fair to the two
+ * people who actually run this either.
+ *
+ * Restore it with the real crew and photos we own.
+ *
+ * const team = [
+ *   { name: "…", role: "Founder & Chief Trip Lead", avatar: "…" },
+ *   { name: "…", role: "Operations & Stays",        avatar: "…" },
+ * ];
+ */
 
 export default function AboutPage() {
   return (
@@ -96,7 +95,8 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* Team */}
+        {/* Team section commented out — see the note by `team` above. */}
+        {/*
         <section className="bg-navy text-cream py-24 md:py-28 relative overflow-hidden">
           <div className="grain opacity-[0.05]" aria-hidden />
           <div className="relative mx-auto max-w-7xl px-6 md:px-8">
@@ -125,6 +125,7 @@ export default function AboutPage() {
             </div>
           </div>
         </section>
+        */}
 
         {/* CTA */}
         <section className="py-24 md:py-28 text-center">

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Cancellation & Refund Policy",
@@ -62,7 +62,7 @@ export default function CancellationPage() {
 
       <h2>3. Refund Processing</h2>
       <p>
-        Approved refunds are processed within <strong>7 business days</strong> to the original payment method (UPI, Card, or Net Banking) via Razorpay. Depending on your bank, the credit may take an additional 2–5 business days to reflect.
+        Approved refunds are processed within <strong>7 business days</strong>, returned by the same route the payment reached us{paymentsConfig.gatewayLive ? " (UPI, card or net banking)" : " — the UPI ID or bank account the money came from"}. Depending on your bank, the credit may take an additional 2–5 business days to reflect.
       </p>
       <p>
         Refunds are issued in Indian Rupees (INR). Any third-party payment gateway charges, currency conversion fees or bank charges levied are non-refundable.
