@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Pricing Details",
@@ -61,15 +61,36 @@ export default function PricingPage() {
       </ul>
 
       <h2>Payment Methods</h2>
-      <p>We accept payments through Razorpay, supporting:</p>
-      <ul>
-        <li><strong>UPI</strong> — Google Pay, PhonePe, Paytm, BHIM and any UPI app.</li>
-        <li><strong>Debit & Credit cards</strong> — Visa, MasterCard, Rupay, American Express.</li>
-        <li><strong>Net banking</strong> — All major Indian banks.</li>
-        <li><strong>EMI</strong> — Available on select credit cards (subject to bank approval).</li>
-      </ul>
+      {paymentsConfig.gatewayLive ? (
+        <>
+          <p>We accept payments through {paymentsConfig.gatewayName}, supporting:</p>
+          <ul>
+            <li><strong>UPI</strong> — Google Pay, PhonePe, Paytm, BHIM and any UPI app.</li>
+            <li><strong>Debit &amp; Credit cards</strong> — Visa, MasterCard, Rupay, American Express.</li>
+            <li><strong>Net banking</strong> — All major Indian banks.</li>
+            <li><strong>EMI</strong> — Available on select credit cards (subject to bank approval).</li>
+          </ul>
+        </>
+      ) : (
+        <>
+          <p>
+            Payment is arranged directly with our team once you book a seat. We currently accept:
+          </p>
+          <ul>
+            <li><strong>UPI</strong> — Google Pay, PhonePe, Paytm, BHIM and any UPI app.</li>
+            <li><strong>Bank transfer</strong> — NEFT, IMPS or RTGS to our current account.</li>
+            <li><strong>Cash</strong> — in person, at our office or a travel festival stall.</li>
+          </ul>
+          <p>
+            Card and net-banking payments are not available yet. When they are, this page will say so
+            before you are ever asked for those details.
+          </p>
+        </>
+      )}
       <p>
-        For privacy and security, {siteConfig.name} does not store any card or banking information. Transactions are processed by Razorpay over secure, PCI-compliant infrastructure.
+        {siteConfig.name} does not store any card or banking information, and no payment credentials are
+        entered on this website. Every payment, however it reaches us, is receipted against your booking
+        and carried onto your GST invoice.
       </p>
 
       <h2>Group Discounts</h2>

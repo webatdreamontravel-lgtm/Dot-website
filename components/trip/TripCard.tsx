@@ -120,7 +120,9 @@ export function TripCard({ trip, featured = false, index = 0 }: TripCardProps) {
             </div>
             <p className="mt-2 text-xs text-cream/75">
               <b className="text-yellow">
-                {trip.seatsAvailable} of {trip.seatsTotal} seats left
+                {trip.seatsAvailable >= trip.seatsTotal
+                  ? `${trip.seatsTotal} seats`
+                  : `${trip.seatsAvailable} of ${trip.seatsTotal} seats left`}
               </b>
             </p>
           </div>

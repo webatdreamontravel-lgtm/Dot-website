@@ -182,6 +182,68 @@ function buildData(d: z.infer<typeof schema>) {
   };
 }
 
+/**
+ * Publish or unpublish a trip from the list, without opening the editor.
+ *
+ * "Active" on screen means status PUBLISHED — the one value every public
+ * query filters on, so unpublishing takes the trip off the site, out of the
+ * sitemap and out of the home page immediately.
+ *
+ * Unpublishing deliberately does NOT touch bookings or seat counts. People
+ * who already booked keep their booking and their /account link; the trip
+ * simply stops being sellable. Cancelling a departure is a different
+ * decision and goes through the bookings screen.
+ */
+export async function setTripPublished(
+  tripId: string,
+  publish: boolean,
+): Promise<{ error?: string }> {
+  const admin = await requireAdmin();
+
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { id: true, slug: true, status: true, title: true },
+  });
+  if (!trip) return { error: "That trip no longer exists." };
+
+  const next = publish ? "PUBLISHED" : "DRAFT";
+  if (trip.status === next) return {};
+
+  // Archived is a deliberate end state set in the editor, not something a
+  // list toggle should quietly undo.
+  if (trip.status === "ARCHIVED") {
+    return { error: "This trip is archived. Reopen it from the trip editor." };
+  }
+
+  await prisma.$transaction([
+    prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        status: next,
+        // Stamp the first publish; leave it alone afterwards so the date
+        // reflects when the trip actually went live, not the last toggle.
+        ...(publish ? { publishedAt: trip.status === "DRAFT" ? new Date() : undefined } : {}),
+      },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorProfileId: admin.id,
+        action: publish ? "trip.publish" : "trip.unpublish",
+        entity: "trip",
+        entityId: tripId,
+        before: { status: trip.status },
+        after: { status: next },
+      },
+    }),
+  ]);
+
+  revalidatePath("/admin/trips");
+  revalidatePath("/trips");
+  revalidatePath(`/trips/${trip.slug}`);
+  revalidatePath("/");
+  return {};
+}
+
 export async function createTrip(
   _prev: TripFormState,
   formData: FormData,

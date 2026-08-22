@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Contact Us",
-  description: `Reach Dream On Travel — Coimbatore office, email, phone, WhatsApp and Instagram.`,
+  description: `Reach Dream On Travel — registered business details, Coimbatore office, email, phone, WhatsApp and Instagram.`,
 };
 
 export default function ContactUsPage() {
@@ -14,18 +14,36 @@ export default function ContactUsPage() {
         For any questions, bookings, support requests or feedback, please use any of the channels below. We respond to all messages within one business day, often the same day.
       </p>
 
-      <h2>Business Information</h2>
+      <h2>Merchant Business Details</h2>
+      {/* Razorpay's review compares this block against the application form,
+          so it is a plain definition list rather than prose — every field
+          they look for, in the order they look for it. */}
       <ul>
-        <li><strong>Registered name:</strong> {siteConfig.name}</li>
-        <li><strong>Established:</strong> {siteConfig.established}</li>
-        <li><strong>Nature of business:</strong> Group travel experiences (Tour Operator)</li>
+        <li>
+          <strong>Registered business name:</strong> {legalConfig.registeredName}
+          {legalConfig.entityType && ` (${legalConfig.entityType})`}
+        </li>
+        <li><strong>Trading / brand name:</strong> {siteConfig.name}</li>
+        <li><strong>Nature of business:</strong> Tour operator — curated group travel experiences</li>
+        <li><strong>Operating since:</strong> {siteConfig.established}</li>
+        <li><strong>Website:</strong> <a href={siteConfig.url}>{siteConfig.url}</a></li>
+        {legalConfig.gstin && <li><strong>GSTIN:</strong> {legalConfig.gstin}</li>}
+        {legalConfig.pan && <li><strong>PAN:</strong> {legalConfig.pan}</li>}
+        {legalConfig.registrationNumber && (
+          <li><strong>Tourism registration:</strong> {legalConfig.registrationNumber}</li>
+        )}
       </ul>
 
-      <h2>Office Address</h2>
+      <h2>Registered Office Address</h2>
       <p>
-        {siteConfig.address.line1}<br />
-        {siteConfig.address.city}<br />
-        {siteConfig.address.state} - {siteConfig.address.pincode}<br />
+        {legalConfig.addressLines.map((line) => (
+          <span key={line}>
+            {line}
+            <br />
+          </span>
+        ))}
+        {siteConfig.address.city}, {siteConfig.address.state} {siteConfig.address.pincode}
+        <br />
         {siteConfig.address.country}
       </p>
 
@@ -58,7 +76,31 @@ export default function ContactUsPage() {
 
       <h2>Grievance Officer</h2>
       <p>
-        For any grievances or complaints not resolved by our regular support channels, you can write directly to our Grievance Officer at <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with the subject line &ldquo;Grievance — [Brief description]&rdquo;. We commit to acknowledging within 48 hours and resolving within 30 calendar days.
+        In accordance with the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021, the contact details of our Grievance Officer are:
+      </p>
+      <ul>
+        <li><strong>Name:</strong> {legalConfig.grievanceOfficer.name}</li>
+        <li><strong>Designation:</strong> {legalConfig.grievanceOfficer.designation}</li>
+        <li><strong>Email:</strong> <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a></li>
+        <li><strong>Phone:</strong> <a href={`tel:${siteConfig.phone.replace(/\s/g, "")}`}>{siteConfig.phone}</a></li>
+      </ul>
+      <p>
+        Please use the subject line &ldquo;Grievance — [Brief description]&rdquo;. We commit to acknowledging within 48 hours and resolving within 30 calendar days.
+      </p>
+
+      <h2>Payment-related queries</h2>
+      {paymentsConfig.gatewayLive ? (
+        <p>
+          Payments on this website are processed by <strong>{paymentsConfig.gatewayLegalName}</strong>. For a failed payment, a duplicate charge, or a refund that has not reached your account within the timeline set out in our <a href="/cancellation-and-refund-policy">Cancellation &amp; Refund Policy</a>, write to <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with your booking reference and the transaction ID. We take these up with the gateway on your behalf — you should not have to chase them yourself.
+        </p>
+      ) : (
+        <p>
+          This website does not take payment online. Payment is arranged directly with our team by{" "}
+          {paymentsConfig.offlineMethods} after you book. For a payment we haven&apos;t acknowledged, or a refund that hasn&apos;t reached you within the timeline set out in our <a href="/cancellation-and-refund-policy">Cancellation &amp; Refund Policy</a>, write to <a href={`mailto:${siteConfig.email}`}>{siteConfig.email}</a> with your booking reference and the UTR or transaction reference.
+        </p>
+      )}
+      <p>
+        <strong>A safety note:</strong> we will never ask for your card number, CVV, UPI PIN, OTP or net-banking password — not by email, not on a call, not on WhatsApp. If anyone claiming to be from {siteConfig.name} asks for these, it is not us. Please report it to the number above.
       </p>
     </PolicyPageLayout>
   );

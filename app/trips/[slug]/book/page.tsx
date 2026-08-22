@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Lock, ShieldCheck } from "lucide-react";
 
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
-import { requireUser } from "@/lib/auth";
-import { getBookableTrip } from "@/lib/queries/booking";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { getSessionProfile } from "@/lib/auth";
+import { getBookableTrip, type BookableTrip } from "@/lib/queries/booking";
+import { computePricing, toRupees } from "@/lib/booking/pricing";
+import { formatINR } from "@/lib/utils";
+import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 import { BookingForm } from "./BookingForm";
 
 type Params = { params: Promise<{ slug: string }> };
@@ -17,9 +19,13 @@ export const metadata: Metadata = { title: "Book your seat", robots: { index: fa
 export default async function BookTripPage({ params }: Params) {
   const { slug } = await params;
 
-  // Gate first, and send them back here afterwards — a customer who signs in
-  // to book should land on the booking form, not the home page.
-  const profile = await requireUser(`/trips/${slug}/book`);
+  // Deliberately NOT requireUser. Sending a signed-out visitor straight to a
+  // login screen means the one thing they came here to find out — what this
+  // actually costs, all in — is hidden behind an account they haven't decided
+  // to create yet. It also means a payment-gateway reviewer auditing the site
+  // hits a wall where the purchase journey should be. So: price first,
+  // account only at the point it's genuinely needed.
+  const profile = await getSessionProfile();
 
   const trip = await getBookableTrip(slug);
   if (!trip) notFound();
@@ -46,7 +52,7 @@ export default async function BookTripPage({ params }: Params) {
 
           {trip.seatsAvailable === 0 ? (
             <SoldOut whatsapp={siteConfig.whatsappUrl} />
-          ) : (
+          ) : profile ? (
             <BookingForm
               trip={trip}
               customer={{
@@ -55,11 +61,137 @@ export default async function BookTripPage({ params }: Params) {
                 phone: profile.phone,
               }}
             />
+          ) : (
+            <SignedOutPreview trip={trip} />
           )}
         </div>
       </main>
       <Footer />
     </>
+  );
+}
+
+/**
+ * What a visitor sees before signing in: the exact, itemised amount, then the
+ * account step.
+ *
+ * Showing the full breakdown here rather than after login is the whole point —
+ * GST and TCS are real money, and finding out about them three screens deep is
+ * the kind of surprise that loses the booking and earns the chargeback.
+ */
+function SignedOutPreview({ trip }: { trip: BookableTrip }) {
+  const price = computePricing(trip, 1);
+  const signInHref = `/login?next=${encodeURIComponent(`/trips/${trip.slug}/book`)}`;
+  const signUpHref = `/signup?next=${encodeURIComponent(`/trips/${trip.slug}/book`)}`;
+
+  const lines = [
+    { label: "Trip fare — 1 traveller", value: price.subtotalPaise },
+    { label: `GST @ ${price.gstPercent}%`, value: price.gstPaise },
+    ...(price.tcsPercent > 0
+      ? [{ label: `TCS @ ${price.tcsPercent}% (overseas package)`, value: price.tcsPaise }]
+      : []),
+  ];
+
+  return (
+    <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_340px]">
+      <section className="rounded-3xl border border-navy/10 bg-white p-6 md:p-8">
+        <h2 className="font-display text-2xl tracking-tight text-navy">What a seat costs</h2>
+        <p className="mt-1.5 text-[0.92rem] leading-relaxed text-navy/60">
+          Per traveller, all inclusive of taxes. Add more travellers on the next step — the
+          total updates as you go.
+        </p>
+
+        <dl className="mt-6 divide-y divide-navy/10 border-y border-navy/10">
+          {lines.map((l) => (
+            <div key={l.label} className="flex items-baseline justify-between gap-4 py-3">
+              <dt className="text-[0.92rem] text-navy/70">{l.label}</dt>
+              <dd className="font-medium tabular-nums text-navy">{formatINR(toRupees(l.value))}</dd>
+            </div>
+          ))}
+          <div className="flex items-baseline justify-between gap-4 py-4">
+            <dt className="font-medium text-navy">Total per traveller</dt>
+            <dd className="font-display text-2xl tabular-nums text-navy">
+              {formatINR(toRupees(price.totalPaise))}
+            </dd>
+          </div>
+        </dl>
+
+        {price.advanceDuePaise > 0 ? (
+          <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
+            <strong className="text-navy">
+              {paymentsConfig.gatewayLive
+                ? `Pay ${formatINR(toRupees(price.advanceDuePaise))} now`
+                : `An advance of ${formatINR(toRupees(price.advanceDuePaise))} confirms your seat`}
+            </strong>{" "}
+            {paymentsConfig.gatewayLive
+              ? "to confirm your seat."
+              : "— the team will collect it directly once you book; nothing is charged on this site."}{" "}
+            The balance of {formatINR(toRupees(price.balancePaise))}{" "}
+            is due before departure — we&apos;ll tell you the exact date when you book.
+          </p>
+        ) : (
+          <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
+            <strong className="text-navy">Nothing is charged online.</strong> Book your seat
+            and our team calls you within one working day to confirm the trip and arrange
+            payment.
+          </p>
+        )}
+
+        <p className="mt-5 text-[0.85rem] leading-relaxed text-navy/55">
+          Cancelling is covered by our{" "}
+          <Link href="/cancellation-and-refund-policy" className="text-teal underline underline-offset-4">
+            refund policy
+          </Link>
+          . Full breakdown of what is and isn&apos;t included is on the{" "}
+          <Link href={`/trips/${trip.slug}`} className="text-teal underline underline-offset-4">
+            trip page
+          </Link>
+          .
+        </p>
+      </section>
+
+      <aside className="lg:sticky lg:top-28 self-start rounded-3xl border border-navy/10 bg-navy p-6 text-cream">
+        <span className="grid h-10 w-10 place-items-center rounded-full bg-cream/10">
+          <Lock className="h-4 w-4" aria-hidden />
+        </span>
+        <h2 className="mt-4 font-display text-2xl tracking-tight">One step left</h2>
+        <p className="mt-2 text-[0.9rem] leading-relaxed text-cream/70">
+          We need an account before we can hold a seat — it&apos;s where your booking,
+          traveller details and trip updates live.
+        </p>
+
+        <Link href={signUpHref} className="btn btn-yellow mt-5 w-full justify-center">
+          Create an account
+        </Link>
+        <Link
+          href={signInHref}
+          className="mt-2.5 block rounded-full border border-cream/25 px-4 py-2.5 text-center text-[0.9rem] font-medium transition hover:bg-cream/10"
+        >
+          I already have one
+        </Link>
+
+        <p className="mt-5 flex items-start gap-2 text-[0.8rem] leading-relaxed text-cream/55">
+          <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden />
+          {paymentsConfig.gatewayLive
+            ? `Payments are processed by ${paymentsConfig.gatewayName}. We never see or store your card details.`
+            : "No card or bank details are collected on this site. The team arranges payment with you directly."}
+        </p>
+
+        <hr className="my-5 border-cream/15" />
+        <p className="text-[0.85rem] leading-relaxed text-cream/70">
+          Prefer to talk to a human first?{" "}
+          <a
+            href={siteConfig.whatsappUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-yellow underline underline-offset-4"
+          >
+            WhatsApp us
+          </a>{" "}
+          and we&apos;ll walk you through it.
+        </p>
+      </aside>
+    </div>
   );
 }
 

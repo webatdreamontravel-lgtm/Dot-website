@@ -242,7 +242,10 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
           <section className="rounded-3xl border border-navy/8 bg-cream p-6 md:p-8">
             <h2 className="font-display text-2xl tracking-tight text-navy">Check it over</h2>
             <p className="mt-1 text-[0.9rem] text-navy/60">
-              Nothing is charged now. We&apos;ll email you and confirm the advance over WhatsApp.
+              Nothing is charged now.{" "}
+              {price.advanceDuePaise > 0
+                ? "We'll email you and confirm the advance over WhatsApp."
+                : "We'll email you, then the team will call to arrange payment."}
             </p>
 
             <dl className="mt-6 flex flex-col gap-px overflow-hidden rounded-2xl border border-navy/10">
@@ -394,8 +397,10 @@ function PriceSummary({
       </div>
 
       <p className="mt-3 px-1 text-[0.8rem] leading-relaxed text-navy/50">
-        No payment is taken online right now. Submitting holds your seats and the team will
-        reach out to collect the advance.
+        No payment is taken online right now. Submitting holds your seats
+        {price.advanceDuePaise > 0
+          ? " and the team will reach out to collect the advance."
+          : " and the team will contact you to arrange payment."}
       </p>
     </aside>
   );

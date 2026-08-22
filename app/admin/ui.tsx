@@ -72,9 +72,18 @@ export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
   UNPAID: { tone: "bad", label: "Unpaid" },
 };
 
+/**
+ * Trip status, in the words the row menu uses.
+ *
+ * These read Active/Inactive rather than Live/Draft so the badge, the
+ * Status filter and the Activate/Deactivate action all describe the same
+ * thing the same way. "Inactive" covers a trip still being written and one
+ * deliberately taken down — from the site's point of view they are
+ * identical, and the distinction was never actionable here.
+ */
 export const TRIP_TONE: Record<string, { tone: string; label: string }> = {
-  PUBLISHED: { tone: "ok", label: "Live" },
-  DRAFT: { tone: "warn", label: "Draft" },
+  PUBLISHED: { tone: "ok", label: "Active" },
+  DRAFT: { tone: "warn", label: "Inactive" },
   ARCHIVED: { tone: "mute", label: "Archived" },
 };
 

@@ -22,7 +22,7 @@ const STATUS_COPY: Record<string, { label: string; tone: string; body: string }>
   REQUESTED: {
     label: "Request received",
     tone: "bg-yellow text-navy",
-    body: "Your seats are held. We'll be in touch to collect the advance and confirm.",
+    body: "Your seats are held. Our team will contact you to arrange payment and confirm.",
   },
   PENDING_PAYMENT: {
     label: "Awaiting payment",
