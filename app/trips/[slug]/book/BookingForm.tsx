@@ -12,6 +12,8 @@ import {
 } from "@/lib/booking/pricing";
 import { cn, formatDateRange, formatINR } from "@/lib/utils";
 import { createBookingRequest } from "./actions";
+import { startPayment } from "./payActions";
+import { useRazorpayCheckout } from "@/components/booking/RazorpayCheckout";
 
 type Traveller = { fullName: string; phone: string; email: string };
 
@@ -22,6 +24,11 @@ const blank = (): Traveller => ({ fullName: "", phone: "", email: "" });
 export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: Customer }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const checkout = useRazorpayCheckout();
+
+  // Whether this trip takes money online at all. Everything below branches on
+  // it: same form, same validation, two different last steps.
+  const payOnline = trip.razorpayEnabled;
 
   const maxSeats = Math.min(trip.seatsAvailable, MAX_SEATS_PER_BOOKING);
 
@@ -39,6 +46,25 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const price = useMemo(() => computePricing(trip, seats), [trip, seats]);
+
+  // What Razorpay will actually charge: the advance when the trip has one,
+  // otherwise the whole thing. Mirrors createPaymentOrder — the server
+  // re-derives this and refuses a mismatch, so the two must agree.
+  /**
+   * Whether to settle the advance or the whole trip now.
+   *
+   * Only offered when there is a genuine choice — an advance that is set, and
+   * a balance left after it. Defaults to the advance because it is the lower
+   * bar, but someone who would rather be done with it shouldn't be forced
+   * into a second payment weeks later.
+   *
+   * The server re-derives the amount from this; it never takes a figure from
+   * the browser.
+   */
+  const canChoose = price.advanceDuePaise > 0 && price.balancePaise > 0;
+  const [payMode, setPayMode] = useState<"ADVANCE" | "FULL">("ADVANCE");
+  const payFull = !canChoose || payMode === "FULL";
+  const payNowPaise = payFull ? price.totalPaise : price.advanceDuePaise;
 
   // Jump to the first problem after the errors have actually rendered — with
   // three travellers on screen the bad field is often below the fold.
@@ -120,6 +146,102 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
       if (result.code === "SIGNED_OUT") {
         router.push(`/login?next=/trips/${trip.slug}/book`);
       }
+    });
+  };
+
+  /**
+   * The paid path: reserve the seats, get an order, hand off to Razorpay.
+   *
+   * On success the browser tells us so and we route to the booking — but the
+   * webhook is what actually confirms it, so if this call fails after a real
+   * payment the customer is not left stranded: the booking still lands, just
+   * a moment later.
+   */
+  const payAndBook = () => {
+    setError(null);
+    startTransition(async () => {
+      const order = await startPayment({
+        slug: trip.slug,
+        seats,
+        payMode: payFull ? "FULL" : "ADVANCE",
+        travellers: travellers.map((t) => ({
+          fullName: t.fullName.trim(),
+          phone: t.phone.trim(),
+          email: t.email.trim(),
+        })),
+        emergencyContactName: emergencyName.trim(),
+        emergencyContactPhone: emergencyPhone.trim(),
+        notes: notes.trim(),
+      });
+
+      if (!order.ok) {
+        setError(order.error);
+        if (order.code === "SEATS_GONE" || order.code === "NOT_BOOKABLE") {
+          setStep(1);
+          router.refresh();
+        }
+        return;
+      }
+
+      await checkout.open(
+        {
+          keyId: order.keyId!,
+          orderId: order.orderId,
+          amountPaise: order.amountPaise,
+          currency: order.currency,
+          reference: order.reference,
+          tripTitle: trip.title,
+          customer: { name: customer.fullName, email: customer.email, phone: customer.phone },
+        },
+        {
+          onSuccess: ({ orderId, paymentId, signature }) => {
+            startTransition(async () => {
+              const res = await fetch("/api/payments/verify", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  razorpay_order_id: orderId,
+                  razorpay_payment_id: paymentId,
+                  razorpay_signature: signature,
+                }),
+              });
+
+              // Whether or not this succeeded, the money is taken and the
+              // webhook will confirm the booking. Sending them to it is
+              // right either way — never leave someone who has just paid
+              // looking at an error with nowhere to go.
+              if (!res.ok) {
+                setError(
+                  "Payment went through, but confirming it here took too long. " +
+                    "Your booking will appear in a moment.",
+                );
+              } else {
+                // The rare case where the money arrived after the seat had
+                // gone. Say so here rather than letting them read it off a
+                // status badge — they have just paid and deserve the plain
+                // sentence, not a colour.
+                const data = await res.json().catch(() => null);
+                if (data?.seatLost) {
+                  setError(
+                    "Your payment went through, but the last seat was taken just before it " +
+                      "reached us. We've emailed you — one of us will call within a working " +
+                      "day with the next departure or a full refund.",
+                  );
+                }
+              }
+              router.push(`/account/bookings/${order.reference}?new=1`);
+            });
+          },
+          onDismiss: () => {
+            setError(
+              `Payment cancelled. Your ${seats === 1 ? "seat is" : "seats are"} held for ` +
+                `15 minutes — you can pay again from your bookings.`,
+            );
+            router.refresh();
+          },
+          onError: (message) => setError(message),
+        },
+      );
     });
   };
 
@@ -283,13 +405,18 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={submit}
-                disabled={pending}
+                onClick={payOnline ? payAndBook : submit}
+                disabled={pending || checkout.busy}
                 className="btn btn-yellow inline-flex justify-center disabled:opacity-70"
               >
-                {pending ? (
+                {pending || checkout.busy ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Saving…
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {payOnline ? "Opening payment…" : "Saving…"}
+                  </>
+                ) : payOnline ? (
+                  <>
+                    <Check className="h-4 w-4" /> Pay {formatINR(toRupees(payNowPaise))} &amp; book
                   </>
                 ) : (
                   <>
@@ -310,7 +437,13 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
         )}
       </div>
 
-      <PriceSummary trip={trip} price={price} />
+      <PriceSummary
+        trip={trip}
+        price={price}
+        canChoose={canChoose}
+        payFull={payFull}
+        setPayMode={setPayMode}
+      />
     </div>
   );
 }
@@ -342,9 +475,16 @@ function Steps({ step }: { step: 1 | 2 }) {
 function PriceSummary({
   trip,
   price,
+  canChoose,
+  payFull,
+  setPayMode,
 }: {
   trip: BookableTrip;
   price: ReturnType<typeof computePricing>;
+  /** True only when there is a real choice: an advance, and a balance after it. */
+  canChoose: boolean;
+  payFull: boolean;
+  setPayMode: (m: "ADVANCE" | "FULL") => void;
 }) {
   return (
     <aside className="order-1 lg:order-2 lg:sticky lg:top-28">
@@ -380,19 +520,29 @@ function PriceSummary({
           </div>
         </dl>
 
-        {price.advanceDuePaise > 0 && (
-          <div className="border-t border-cream/10 bg-cream/[0.04] px-6 py-4">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[0.85rem] text-cream/75">Advance to confirm</span>
-              <b className="font-display text-lg tabular-nums text-yellow">
-                {formatINR(toRupees(price.advanceDuePaise))}
-              </b>
+        {canChoose && (
+          <fieldset className="border-t border-cream/10 bg-cream/[0.04] px-6 py-4">
+            <legend className="sr-only">How much to pay now</legend>
+            <p className="mb-2.5 text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-cream/45">
+              Pay now
+            </p>
+            <div className="flex flex-col gap-2">
+              <PayChoice
+                checked={!payFull}
+                onSelect={() => setPayMode("ADVANCE")}
+                label="Advance"
+                amount={formatINR(toRupees(price.advanceDuePaise))}
+                hint={`${formatINR(toRupees(price.balancePaise))} due before departure`}
+              />
+              <PayChoice
+                checked={payFull}
+                onSelect={() => setPayMode("FULL")}
+                label="Full amount"
+                amount={formatINR(toRupees(price.totalPaise))}
+                hint="Nothing left to pay. Done in one go."
+              />
             </div>
-            <div className="mt-1 flex items-baseline justify-between text-[0.8rem] text-cream/50">
-              <span>Balance later</span>
-              <span className="tabular-nums">{formatINR(toRupees(price.balancePaise))}</span>
-            </div>
-          </div>
+          </fieldset>
         )}
       </div>
 
@@ -479,6 +629,61 @@ function Field({
         )}
       />
       {error && <span className="mt-1 block text-[0.78rem] text-coral">{error}</span>}
+    </label>
+  );
+}
+
+/**
+ * One of the two pay-now options.
+ *
+ * A radio rather than a toggle: both amounts stay on screen, so the choice is
+ * made by comparing two numbers rather than by flipping something and
+ * watching a figure change. The whole row is the label, so the tap target is
+ * the card and not a 16px circle.
+ */
+function PayChoice({
+  checked,
+  onSelect,
+  label,
+  amount,
+  hint,
+}: {
+  checked: boolean;
+  onSelect: () => void;
+  label: string;
+  amount: string;
+  hint: string;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3 transition",
+        checked
+          ? "border-yellow/60 bg-yellow/[0.09]"
+          : "border-cream/15 hover:border-cream/30 hover:bg-cream/[0.04]",
+      )}
+    >
+      <input
+        type="radio"
+        name="payMode"
+        checked={checked}
+        onChange={onSelect}
+        className="mt-1 h-4 w-4 flex-none accent-yellow"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-3">
+          <span className="text-[0.9rem] font-medium text-cream">{label}</span>
+          <b
+            className={cn(
+              "font-display text-lg tabular-nums",
+              checked ? "text-yellow" : "text-cream/70",
+            )}
+          >
+            {amount}
+          </b>
+        </span>
+        <span className="mt-0.5 block text-[0.78rem] leading-snug text-cream/50">{hint}</span>
+      </span>
     </label>
   );
 }

@@ -73,6 +73,15 @@ enum PaymentStatus {
   REFUNDED
 }
 
+/// A refund's own lifecycle, distinct from the payment it came out of.
+/// Razorpay confirms a refund asynchronously, so PENDING is a real state
+/// the money sits in — not a transient one we can skip.
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
 enum PaymentMethod {
   RAZORPAY
   UPI_MANUAL
@@ -132,6 +141,7 @@ model Profile {
   seatHolds        SeatHold[]
   reviews          Review[]
   recordedPayments Payment[]  @relation("RecordedBy")
+  initiatedRefunds Refund[]   @relation("RefundInitiatedBy")
   auditEntries     AuditLog[]
 
   @@index([phone])
@@ -319,6 +329,11 @@ model Booking {
 
   /// Mirrors the hold while status is PENDING_PAYMENT.
   holdExpiresAt DateTime? @map("hold_expires_at") @db.Timestamptz(3)
+  /// The hold this booking is standing on, until payment confirms it.
+  /// confirm_seat_hold() needs the id, and the seat_holds.booking_id link
+  /// can't be written before confirmation — that function requires it null.
+  /// Cleared once the seats are counted.
+  pendingHoldId String?   @map("pending_hold_id") @db.Uuid
 
   confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(3)
   cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(3)
@@ -335,6 +350,7 @@ model Booking {
   travellers  BookingTraveller[]
   instalments BookingInstalment[]
   payments    Payment[]
+  refunds     Refund[]
   seatHold    SeatHold?
   emails      EmailLog[]
 
@@ -438,10 +454,55 @@ model Payment {
   booking    Booking            @relation(fields: [bookingId], references: [id], onDelete: Restrict)
   instalment BookingInstalment? @relation(fields: [instalmentId], references: [id], onDelete: SetNull)
   recordedBy Profile?           @relation("RecordedBy", fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+  refunds    Refund[]
 
   @@index([bookingId, createdAt])
   @@index([status, createdAt])
   @@map("payments")
+}
+
+/// Money going back out. APPEND ONLY, like payments.
+///
+/// A row per refund rather than a column on the payment, because a booking
+/// can be refunded in parts — cancel one traveller of four now, the rest
+/// later — and a single `razorpay_refund_id` column can only remember the
+/// most recent one. The history is the point: this is the record that
+/// answers "what did we actually send back, and when".
+///
+/// `bookingId` is denormalised alongside `paymentId` so the booking screen
+/// can total refunds without joining through payments.
+model Refund {
+  id        String @id @default(uuid()) @db.Uuid
+  paymentId String @map("payment_id") @db.Uuid
+  bookingId String @map("booking_id") @db.Uuid
+
+  /// Always positive. Direction is implied by the model, never by sign.
+  amountPaise Int          @map("amount_paise")
+  status      RefundStatus @default(PENDING)
+
+  /// Set once Razorpay accepts the request. Unique so a replayed
+  /// refund.processed webhook can't create a second row.
+  razorpayRefundId String? @unique @map("razorpay_refund_id")
+
+  /// Shown to the customer. `notes` is internal.
+  reason String?
+  notes  String?
+
+  initiatedByProfileId String? @map("initiated_by_profile_id") @db.Uuid
+  failureReason        String? @map("failure_reason")
+
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  initiatedBy Profile? @relation("RefundInitiatedBy", fields: [initiatedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, createdAt])
+  @@index([status, createdAt])
+  @@index([paymentId])
+  @@map("refunds")
 }
 
 /// Raw webhook receipts. The unique eventId is what makes webhook handling

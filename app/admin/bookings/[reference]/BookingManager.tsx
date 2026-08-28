@@ -13,6 +13,7 @@ import { BOOKING_TONE, Chip, Panel } from "../../ui";
 import {
   cancelSeat,
   recordPayment,
+  refundBooking,
   updateBookingDetails,
   updateBookingStatus,
   type ActionResult,
@@ -419,6 +420,141 @@ export function DetailsPanel({
   );
 }
 
+/**
+ * Sends money back through Razorpay.
+ *
+ * Deliberately more friction than recording a payment: a refund leaves the
+ * account and cannot be undone from here, so it asks for a reason and states
+ * the ceiling rather than silently clamping to it.
+ *
+ * The figure it shows is what has actually LEFT the account — Razorpay
+ * confirms refunds asynchronously, so a refund requested a minute ago is
+ * still counted as pending, not refunded.
+ */
+export function RefundPanel({
+  reference,
+  refundablePaise,
+  pendingPaise,
+  refundedPaise,
+  hasOnlinePayment,
+}: {
+  reference: string;
+  refundablePaise: number;
+  pendingPaise: number;
+  refundedPaise: number;
+  hasOnlinePayment: boolean;
+}) {
+  const { run, pending, error } = useAction();
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
+
+  const maxRupees = refundablePaise / 100;
+  const entered = Number(amount || 0);
+  const tooMuch = entered > maxRupees;
+
+  if (!hasOnlinePayment) {
+    return (
+      <section className="rounded-[14px] border border-[#e3e7ee] bg-white p-5 shadow-sm">
+        <h2 className="text-[0.95rem] font-semibold text-[#16203a]">Refund</h2>
+        <p className="mt-1.5 text-[0.83rem] leading-relaxed text-[#5a6785]">
+          Nothing on this booking was paid online, so there is nothing to send back
+          through Razorpay. Return it the way it came in and note it against the booking.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-[14px] border border-[#e3e7ee] bg-white p-5 shadow-sm">
+      <h2 className="text-[0.95rem] font-semibold text-[#16203a]">Refund</h2>
+
+      <dl className="mt-3 space-y-1 text-[0.83rem]">
+        <div className="flex justify-between">
+          <dt className="text-[#5a6785]">Already refunded</dt>
+          <dd className="font-medium tabular-nums text-[#16203a]">{formatINR(toRupees(refundedPaise))}</dd>
+        </div>
+        {pendingPaise > 0 && (
+          <div className="flex justify-between">
+            <dt className="text-[#8b6a00]">Awaiting Razorpay</dt>
+            <dd className="font-medium tabular-nums text-[#8b6a00]">{formatINR(toRupees(pendingPaise))}</dd>
+          </div>
+        )}
+        <div className="flex justify-between border-t border-[#eef1f6] pt-1">
+          <dt className="text-[#5a6785]">Left to refund</dt>
+          <dd className="font-semibold tabular-nums text-[#16203a]">{formatINR(toRupees(refundablePaise))}</dd>
+        </div>
+      </dl>
+
+      {refundablePaise <= 0 ? (
+        <p className="mt-3 text-[0.83rem] text-[#5a6785]">
+          Everything paid on this booking has been refunded.
+        </p>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <Field label="Amount (₹)">
+            <Input
+              type="number"
+              min={1}
+              max={maxRupees}
+              value={amount}
+              onChange={(v) => { setAmount(v); setConfirming(false); }}
+              placeholder={String(Math.floor(maxRupees))}
+            />
+          </Field>
+          <Field label="Reason (shown to the customer)">
+            <Input value={reason} onChange={setReason} placeholder="e.g. Cancelled 14 days before" />
+          </Field>
+
+          {tooMuch && (
+            <ErrorNote>
+              That is more than the {formatINR(toRupees(refundablePaise))} left on this booking.
+            </ErrorNote>
+          )}
+          {error && <ErrorNote>{error}</ErrorNote>}
+
+          {confirming ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#f0dcae] bg-[#fdf6e3] px-3 py-2.5">
+              <span className="text-[0.83rem] text-[#7a4a00]">
+                Send {formatINR(entered)} back? This can&apos;t be undone here.
+              </span>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() =>
+                  run(
+                    () => refundBooking({ reference, amountRupees: entered, reason }),
+                    () => { setAmount(""); setReason(""); setConfirming(false); },
+                  )
+                }
+                className="ml-auto rounded-lg bg-[#a33] px-3 py-1.5 text-[0.82rem] font-medium text-white disabled:opacity-60"
+              >
+                {pending ? "Sending…" : "Yes, refund"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="text-[0.82rem] text-[#5a6785] underline underline-offset-2"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={pending || !entered || tooMuch}
+              onClick={() => setConfirming(true)}
+              className="w-full rounded-lg border border-[#a33]/30 bg-[#fdf3f3] px-3.5 py-2 text-[0.85rem] font-medium text-[#a33] transition hover:bg-[#fbe9e9] disabled:opacity-50"
+            >
+              Refund {entered ? formatINR(entered) : "…"}
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -437,13 +573,24 @@ function Input({
   value,
   onChange,
   placeholder,
+  type,
+  min,
+  max,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  /** Numeric inputs get the right keypad on a phone and the browser's own bounds. */
+  type?: "text" | "number";
+  min?: number;
+  max?: number;
 }) {
   return (
     <input
+      type={type ?? "text"}
+      min={min}
+      max={max}
+      inputMode={type === "number" ? "decimal" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}

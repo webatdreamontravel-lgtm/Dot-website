@@ -407,3 +407,70 @@ function fail(e: unknown, fallback: string): ActionResult {
   if (!safe) console.error("[admin/bookings]", e);
   return { ok: false, error: safe ? message : fallback };
 }
+
+/**
+ * Sends money back through Razorpay.
+ *
+ * Kept in this file rather than lib/payments so the admin screens have one
+ * import for every booking action; the arithmetic and the API call live in
+ * lib/payments/refunds.ts.
+ *
+ * Note what this does NOT do: mark the booking refunded. Razorpay confirms
+ * refunds asynchronously, so `refunded_paise` is only written when the
+ * refund.processed webhook arrives. Until then the admin shows the refund as
+ * pending, which is the truth — the money has been asked for, not moved.
+ */
+const refundSchema = z.object({
+  reference: z.string().trim().min(1),
+  amountRupees: z.coerce.number().positive("Enter an amount greater than zero"),
+  reason: z.string().trim().max(300).optional().or(z.literal("")),
+  notes: z.string().trim().max(500).optional().or(z.literal("")),
+});
+
+export async function refundBooking(
+  input: z.input<typeof refundSchema>,
+): Promise<ActionResult> {
+  const admin = await requireAdmin();
+
+  const parsed = refundSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the amount and try again." };
+  }
+  const data = parsed.data;
+
+  const booking = await prisma.booking.findUnique({
+    where: { reference: data.reference },
+    select: { id: true, trip: { select: { slug: true } } },
+  });
+  if (!booking) return { ok: false, error: "That booking no longer exists." };
+
+  try {
+    const { requestRefund } = await import("@/lib/payments/refunds");
+    const result = await requestRefund({
+      bookingId: booking.id,
+      amountPaise: Math.round(data.amountRupees * 100),
+      reason: data.reason || undefined,
+      notes: data.notes || undefined,
+      initiatedByProfileId: admin.id,
+    });
+
+    if (!result.ok) return { ok: false, error: result.error };
+
+    await prisma.auditLog.create({
+      data: {
+        actorProfileId: admin.id,
+        action: "refund.requested",
+        entity: "booking",
+        entityId: booking.id,
+        after: { amountPaise: result.amountPaise, reason: data.reason || null },
+      },
+    });
+
+    revalidatePath(`/admin/bookings/${data.reference}`);
+    revalidatePath("/admin/bookings");
+    revalidatePath(`/trips/${booking.trip.slug}`);
+    return { ok: true };
+  } catch (e) {
+    return fail(e, "Couldn't start that refund.");
+  }
+}

@@ -39,9 +39,57 @@ const STATUS_COPY: Record<string, { label: string; tone: string; body: string }>
   EXPIRED: {
     label: "Expired",
     tone: "bg-navy/10 text-navy",
-    body: "The hold lapsed before payment, so the seats were released.",
+    /**
+     * Written for two readers at once.
+     *
+     * Usually this is someone who abandoned checkout, and the first sentence
+     * is all they need. But a payment can reach us late — the bank
+     * authorises after our hold lapsed, or the gateway retries a failed
+     * delivery for up to 24 hours — and in that window this page is the
+     * first thing a customer who HAS paid will look at. "The seats were
+     * released" reads as "your money is gone", so the second sentence is
+     * there for them. It confirms itself: when the payment lands the status
+     * flips to Confirmed and they get the usual email.
+     */
+    body:
+      "We didn't receive payment in time, so the seats were released. If you did pay, " +
+      "it can occasionally take a few minutes to reach us — we'll confirm and email you " +
+      "as soon as it does.",
   },
 };
+
+/**
+ * The status shown to the customer.
+ *
+ * REQUESTED means two very different things depending on whether money has
+ * arrived. Normally it's a booking the team will ring about to collect
+ * payment. But it is also where a booking lands when a payment came through
+ * *after* the seat hold expired and the trip had filled — and telling
+ * someone who has just paid ₹1,013 that "our team will contact you to
+ * arrange payment" is both wrong and alarming.
+ *
+ * The amount paid is what tells the two apart.
+ */
+function statusFor(bookingStatus: string, amountPaidPaise: number) {
+  if (bookingStatus === "REQUESTED" && amountPaidPaise > 0) {
+    return {
+      label: "Payment received",
+      tone: "bg-yellow text-navy",
+      body:
+        "We have your payment, but the last seat was taken moments before it reached us. " +
+        "That's on us — one of us will call you within one working day with a seat on the " +
+        "next departure or a full refund. Your money is safe in the meantime.",
+    };
+  }
+
+  return (
+    STATUS_COPY[bookingStatus] ?? {
+      label: bookingStatus,
+      tone: "bg-navy/10 text-navy",
+      body: "",
+    }
+  );
+}
 
 export default async function BookingDetailPage({ params, searchParams }: Params) {
   const { reference } = await params;
@@ -51,11 +99,7 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   const booking = await getBookingForCustomer(reference, profile.id);
   if (!booking) notFound();
 
-  const status = STATUS_COPY[booking.status] ?? {
-    label: booking.status,
-    tone: "bg-navy/10 text-navy",
-    body: "",
-  };
+  const status = statusFor(booking.status, booking.amountPaidPaise);
   const advanceDuePaise = (booking.trip.advancePaise ?? 0) * booking.seats;
   const balancePaise = booking.totalPaise - booking.amountPaidPaise;
 

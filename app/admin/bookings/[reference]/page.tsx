@@ -6,7 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { getAdminBooking, rupees } from "@/lib/queries/admin";
 import { formatDateRange, formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, PAYMENT_TONE, Panel } from "../../ui";
-import { DetailsPanel, PaymentPanel, StatusPanel } from "./BookingManager";
+import { DetailsPanel, PaymentPanel, RefundPanel, StatusPanel } from "./BookingManager";
 
 export const metadata = { title: "Booking" };
 
@@ -153,6 +153,30 @@ export default async function AdminBookingPage({
 
         <div>
           <PaymentPanel bookingId={booking.id} balancePaise={Math.max(balancePaise, 0)} />
+
+          {/* Only PROCESSED refunds have actually left the account; PENDING
+              ones are with Razorpay. Both are held back from the refundable
+              ceiling so a second refund can't be raised against money that is
+              already on its way out. */}
+          <RefundPanel
+            reference={booking.reference}
+            refundedPaise={booking.refunds
+              .filter((r) => r.status === "PROCESSED")
+              .reduce((n, r) => n + r.amountPaise, 0)}
+            pendingPaise={booking.refunds
+              .filter((r) => r.status === "PENDING")
+              .reduce((n, r) => n + r.amountPaise, 0)}
+            refundablePaise={Math.max(
+              booking.amountPaidPaise -
+                booking.refunds
+                  .filter((r) => r.status !== "FAILED")
+                  .reduce((n, r) => n + r.amountPaise, 0),
+              0,
+            )}
+            hasOnlinePayment={booking.payments.some(
+              (p) => p.method === "RAZORPAY" && p.status === "CAPTURED" && p.razorpayPaymentId,
+            )}
+          />
           <StatusPanel
             bookingId={booking.id}
             status={booking.status}

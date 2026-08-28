@@ -508,7 +508,19 @@ export async function getAdminBooking(reference: string) {
         select: {
           id: true, method: true, status: true, amountPaise: true,
           externalReference: true, notes: true, capturedAt: true, createdAt: true,
+          razorpayPaymentId: true,
           recordedBy: { select: { fullName: true, email: true } },
+        },
+      },
+      // Money already sent back, and money on its way. They are shown
+      // separately because only the first has actually left the account.
+      refunds: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true, amountPaise: true, status: true, reason: true,
+          razorpayRefundId: true, processedAt: true, createdAt: true,
+          failureReason: true,
+          initiatedBy: { select: { fullName: true, email: true } },
         },
       },
     },
