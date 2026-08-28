@@ -50,6 +50,7 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
     where: { razorpayOrderId: input.orderId },
     select: {
       id: true, bookingId: true, amountPaise: true, status: true,
+      convenienceFeePaise: true,
       booking: { select: { reference: true } },
     },
   });
@@ -139,7 +140,16 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
       seatLost = claimed === 0;
     }
 
-    const paid = booking.amountPaidPaise + input.amountPaise;
+    /**
+     * Credit the booking with what it is owed, NOT what the card was charged.
+     *
+     * amountPaise is the gross and includes the convenience fee, which is
+     * money in transit to Razorpay. Adding the gross here would make every
+     * online booking look overpaid by the fee, leave a permanent phantom
+     * balance, and make bookings_refund_within_paid guard a number that was
+     * never ours to refund.
+     */
+    const paid = booking.amountPaidPaise + (input.amountPaise - payment.convenienceFeePaise);
 
     await tx.booking.update({
       where: { id: booking.id },

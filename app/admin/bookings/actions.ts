@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/auth";
 import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -337,7 +338,16 @@ const detailsSchema = z.object({
       z.object({
         id: z.string().uuid(),
         fullName: z.string().trim().min(2, "Name is required").max(120),
-        phone: z.string().trim().max(20).optional().or(z.literal("")),
+        // Optional here — the admin edits an existing traveller and may be
+        // fixing only a name — but anything present is normalised, so an
+        // edit can't reintroduce a "+91…" variant of a number we already hold.
+        phone: z
+          .string()
+          .trim()
+          .refine((v) => v === "" || isValidPhone(v), "Enter a 10-digit mobile number")
+          .transform(toNationalDigits)
+          .optional()
+          .or(z.literal("")),
         email: z.string().trim().max(160).optional().or(z.literal("")),
       }),
     )

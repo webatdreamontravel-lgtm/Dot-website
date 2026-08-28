@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { siteUrl } from "@/lib/siteUrl";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type SignupState = {
   status: "idle" | "sent" | "error";
@@ -31,10 +32,10 @@ const schema = z.object({
     .string()
     .trim()
     .min(1, "Phone number is required")
-    .refine((v) => {
-      const digits = v.replace(/\D/g, "");
-      return digits.length >= 10 && digits.length <= 15;
-    }, "Enter a valid phone number"),
+    .refine(isValidPhone, "Enter a 10-digit mobile number")
+    // Stored as ten national digits, so the same number can never arrive
+    // as three different strings.
+    .transform(toNationalDigits),
   state: z.string().trim().min(1, "Choose your state"),
   city: z.string().trim().min(2, "Which city?").max(80),
   dateOfBirth: z

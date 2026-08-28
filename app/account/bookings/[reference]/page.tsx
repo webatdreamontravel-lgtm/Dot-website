@@ -102,6 +102,11 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   const status = statusFor(booking.status, booking.amountPaidPaise);
   const advanceDuePaise = (booking.trip.advancePaise ?? 0) * booking.seats;
   const balancePaise = booking.totalPaise - booking.amountPaidPaise;
+  // What the gateway took on top. Not part of the trip price, and not
+  // counted toward the balance — but it did leave their account.
+  const feesCharged = booking.payments
+    .filter((p) => p.status === "CAPTURED")
+    .reduce((n, p) => n + p.convenienceFeePaise, 0);
 
   return (
     <>
@@ -214,6 +219,21 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                 {booking.amountPaidPaise > 0 && (
                   <Line label="Paid" value={formatINR(toRupees(booking.amountPaidPaise))} />
                 )}
+
+                {/* The card statement will read higher than "Paid" above,
+                    because the gateway's fee rode along with it. Someone
+                    reconciling their bank statement against this page needs
+                    that difference named, or it looks like we took more than
+                    we said. */}
+                {feesCharged > 0 && (
+                  <Line
+                    label="Convenience fee charged"
+                    value={formatINR(toRupees(feesCharged))}
+                    hint={`Your statement will show ${formatINR(
+                      toRupees(booking.amountPaidPaise + feesCharged),
+                    )} in total`}
+                  />
+                )}
                 {balancePaise > 0 && (
                   <div className="mt-3 rounded-xl bg-cream-soft px-4 py-3">
                     <div className="flex items-baseline justify-between">
@@ -259,10 +279,22 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   );
 }
 
-function Line({ label, value }: { label: string; value: string }) {
+function Line({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  /** A quiet second line under the label, for context the figure needs. */
+  hint?: string;
+}) {
   return (
     <div className="mb-1.5 flex items-baseline justify-between gap-3">
-      <dt className="text-navy/65">{label}</dt>
+      <dt className="text-navy/65">
+        {label}
+        {hint && <span className="mt-0.5 block text-[0.78rem] text-navy/40">{hint}</span>}
+      </dt>
       <dd className="tabular-nums text-navy">{value}</dd>
     </div>
   );

@@ -338,12 +338,12 @@ export function TripForm({
       {/* ── Publishing ── */}
       <Section title="Booking & publishing">
         <div className="flex flex-col">
-          <Toggle
-            name="razorpayEnabled"
-            defaultChecked={values.razorpayEnabled ?? false}
-            title="Accept online payment (Razorpay)"
-            body="When off, the booking form still works — it records a booking request and emails you and the customer, and you collect payment yourself."
-          />
+          {/* The Razorpay toggle used to live here. Online payment is now on
+              for every trip by default — the toggle existed to roll it out
+              one trip at a time while it was unproven, and leaving it off by
+              default meant a new trip silently couldn't take money. The
+              column survives so a single batch can still be forced offline
+              from SQL if one ever needs to be. */}
           <Toggle
             name="autoCloseWhenFull"
             defaultChecked={values.autoCloseWhenFull ?? true}
@@ -367,14 +367,14 @@ export function TripForm({
             <div>
               <b className="block text-[0.89rem] font-semibold">Status</b>
               <small className="mt-0.5 block text-[0.8rem] text-[#8b96ad]">
-                This is what controls visibility. An inactive trip is invisible on the site;
-                activating puts it on the homepage and makes it bookable. You can also flip this
-                from the trips list.
+                Where this trip is in its life. Drafts are invisible; publishing puts it on the
+                homepage and makes it bookable. Separately, the Active switch in the trips list
+                can pull a live trip off the site without demoting it back to Draft.
               </small>
             </div>
             <select name="status" defaultValue={values.status ?? "DRAFT"} className={cn(input, "w-auto")}>
-              <option value="DRAFT">Inactive — not on the site</option>
-              <option value="PUBLISHED">Active — live on the site</option>
+              <option value="DRAFT">Draft</option>
+              <option value="PUBLISHED">Live on site</option>
               <option value="ARCHIVED">Archived</option>
             </select>
           </div>

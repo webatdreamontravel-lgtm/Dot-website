@@ -1,5 +1,7 @@
 "use client";
 
+import { PhoneInput } from "@/components/shared/PhoneInput";
+
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { AlertCircle, Check, IndianRupee, Loader2, Pencil, Trash2, X } from "lucide-react";
@@ -361,7 +363,11 @@ export function DetailsPanel({
               {editing && !cancelled ? (
                 <div className="grid gap-2.5 sm:grid-cols-3">
                   <Input value={t.fullName} onChange={(v) => patch(t.id, { fullName: v })} placeholder="Full name" />
-                  <Input value={t.phone ?? ""} onChange={(v) => patch(t.id, { phone: v })} placeholder="Phone" />
+                  <PhoneInput
+                    value={t.phone ?? ""}
+                    onChange={(v) => patch(t.id, { phone: v })}
+                    className={controlClass}
+                  />
                   <Input value={t.email ?? ""} onChange={(v) => patch(t.id, { email: v })} placeholder="Email" />
                 </div>
               ) : (

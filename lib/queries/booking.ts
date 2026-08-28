@@ -43,6 +43,7 @@ export async function getBookableTrip(slug: string): Promise<BookableTrip | null
     where: {
       slug,
       status: "PUBLISHED",
+      isActive: true,
       deletedAt: null,
       endDate: { gte: new Date() },
     },
@@ -88,6 +89,11 @@ export async function getBookingForCustomer(reference: string, profileId: string
           fullName: true, phone: true, email: true,
           emergencyContactName: true, emergencyContactPhone: true,
         },
+      },
+      // Only the fee is needed: the customer's page names the difference
+      // between what it says they paid and what their bank statement shows.
+      payments: {
+        select: { status: true, convenienceFeePaise: true },
       },
     },
   });

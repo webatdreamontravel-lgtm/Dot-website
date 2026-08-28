@@ -14,7 +14,7 @@ import {
   Users,
 } from "lucide-react";
 
-import { setTripPublished } from "./actions";
+import { setTripActive } from "./actions";
 
 const MENU_WIDTH = 232;
 /** Enough for five items plus the hint line; only used to decide flip. */
@@ -35,11 +35,15 @@ export function TripRowMenu({
   tripId,
   slug,
   isPublished,
+  isActive,
   bookingCount,
 }: {
   tripId: string;
   slug: string;
+  /** Editorial state — whether the trip is finished. */
   isPublished: boolean;
+  /** The master switch, which outranks status. */
+  isActive: boolean;
   bookingCount: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -100,7 +104,7 @@ export function TripRowMenu({
   const toggle = () => {
     setError(null);
     startTransition(async () => {
-      const res = await setTripPublished(tripId, !isPublished);
+      const res = await setTripActive(tripId, !isActive);
       if (res.error) setError(res.error);
       else setOpen(false);
     });
@@ -131,7 +135,7 @@ export function TripRowMenu({
       <Item href={`/preview/trips/${tripId}`} icon={Eye} newTab>
         Preview
       </Item>
-      {isPublished && (
+      {isPublished && isActive && (
         <Item href={`/trips/${slug}`} icon={ExternalLink} newTab>
           Live page
         </Item>
@@ -148,23 +152,25 @@ export function TripRowMenu({
         disabled={pending}
         className={
           "flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[0.85rem] transition disabled:opacity-60 " +
-          (isPublished ? "text-[#a33] hover:bg-[#fdf3f3]" : "text-[#0f7a55] hover:bg-[#f1faf5]")
+          (isActive ? "text-[#a33] hover:bg-[#fdf3f3]" : "text-[#0f7a55] hover:bg-[#f1faf5]")
         }
       >
         {pending ? (
           <Loader2 className="h-3.5 w-3.5 flex-none animate-spin" />
-        ) : isPublished ? (
+        ) : isActive ? (
           <PowerOff className="h-3.5 w-3.5 flex-none" />
         ) : (
           <Radio className="h-3.5 w-3.5 flex-none" />
         )}
-        {pending ? "Saving…" : isPublished ? "Deactivate" : "Activate"}
+        {pending ? "Saving…" : isActive ? "Deactivate" : "Activate"}
       </button>
 
       <p className="px-3.5 pb-2 pt-0.5 text-[0.72rem] leading-snug text-[#8b96ad]">
-        {isPublished
-          ? "Takes it off the site. Existing bookings are unaffected."
-          : "Puts it live on the site and in search."}
+        {isActive
+          ? "Takes it off the site and marks it Archived. Existing bookings are unaffected."
+          : isPublished
+            ? "Puts it back on the site."
+            : "Puts it back on the site as Live — unless it's a Draft, which stays a Draft."}
       </p>
 
       {error && (

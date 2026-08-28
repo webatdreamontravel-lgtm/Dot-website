@@ -89,6 +89,13 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 export type TripFilters = {
   q?: string;
   status?: string;
+  /**
+   * "false" | "all". Absent means ACTIVE ONLY — the default view, because a
+   * deactivated trip is archived and shouldn't clutter the working list.
+   * "all" is the explicit escape hatch; without it, inactive trips would be
+   * unreachable.
+   */
+  active?: string;
   from?: string;
   to?: string;
   page?: string;
@@ -109,13 +116,23 @@ export type AdminTripRow = {
   seatsAvailable: number;
   pricePaise: number;
   razorpayEnabled: boolean;
+  isActive: boolean;
   bookingCount: number;
   departed: boolean;
 };
 
-function tripWhere({ q, status, from, to }: TripFilters): Prisma.TripWhereInput {
+function tripWhere({ q, status, active, from, to }: TripFilters): Prisma.TripWhereInput {
   const where: Prisma.TripWhereInput = { deletedAt: null };
   if (status) where.status = status as Prisma.TripWhereInput["status"];
+
+  // Its own filter rather than another option on Status, because the two are
+  // independent: a trip can be Live-but-inactive, or Draft-and-active. Folding
+  // them into one dropdown would make those states unreachable.
+  //
+  // Defaults to active-only. Deactivating archives a trip, so the unfiltered
+  // list would otherwise fill with things deliberately put away.
+  if (active === "false") where.isActive = false;
+  else if (active !== "all") where.isActive = true;
 
   // Departure-date range. Both ends optional, so a single date works too.
   // Unparseable input is dropped rather than applied — a filter nobody can
@@ -164,7 +181,7 @@ export async function getAdminTrips(
     select: {
       id: true, slug: true, title: true, batchName: true, category: true, cardImage: true,
       startDate: true, endDate: true, status: true, totalSeats: true,
-      seatsBooked: true, pricePaise: true, razorpayEnabled: true,
+      seatsBooked: true, pricePaise: true, razorpayEnabled: true, isActive: true,
       _count: { select: { bookings: true } },
     },
   });
@@ -196,6 +213,7 @@ export async function getAdminTrips(
       seatsAvailable: availMap.get(t.id) ?? 0,
       pricePaise: t.pricePaise,
       razorpayEnabled: t.razorpayEnabled,
+      isActive: t.isActive,
       bookingCount: t._count.bookings,
       departed: t.endDate.getTime() < now,
     })),
@@ -209,7 +227,9 @@ export async function getAdminTrips(
 /** Trips currently visible to customers — independent of the admin filters. */
 export function countLiveTrips() {
   return prisma.trip.count({
-    where: { status: "PUBLISHED", deletedAt: null, endDate: { gte: new Date() } },
+    // isActive as well as status: the header says "live on the site", and a
+    // deactivated trip is not on the site however published it is.
+    where: { status: "PUBLISHED", isActive: true, deletedAt: null, endDate: { gte: new Date() } },
   });
 }
 
@@ -223,10 +243,10 @@ export function getUpcomingTrips(limit = 8) {
   });
 }
 
-/** Published trips that have already ended — still showing as Live on the site. */
+/** Published trips that have already ended — still showing on the site. */
 export function countDepartedTrips() {
   return prisma.trip.count({
-    where: { status: "PUBLISHED", deletedAt: null, endDate: { lt: new Date() } },
+    where: { status: "PUBLISHED", isActive: true, deletedAt: null, endDate: { lt: new Date() } },
   });
 }
 
@@ -507,6 +527,7 @@ export async function getAdminBooking(reference: string) {
         orderBy: { createdAt: "desc" },
         select: {
           id: true, method: true, status: true, amountPaise: true,
+          convenienceFeePaise: true, convenienceFeeRateBp: true,
           externalReference: true, notes: true, capturedAt: true, createdAt: true,
           razorpayPaymentId: true,
           recordedBy: { select: { fullName: true, email: true } },

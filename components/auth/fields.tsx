@@ -29,6 +29,7 @@ export function TextField({
   hint,
   type = "text",
   className,
+  prefix,
   ...rest
 }: {
   name: string;
@@ -37,6 +38,14 @@ export function TextField({
   hint?: string;
   type?: string;
   className?: string;
+  /**
+   * Static text pinned to the left of the input — "+91" and the like.
+   *
+   * Outside the value on purpose: a prefix that lives in the field can be
+   * deleted, typed twice, or submitted as part of the number. This one can't
+   * be any of those.
+   */
+  prefix?: string;
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "name" | "type" | "className">) {
   const errorId = `${name}-error`;
   const hintId = `${name}-hint`;
@@ -44,15 +53,33 @@ export function TextField({
   return (
     <div className={className}>
       <Label htmlFor={name} label={label} hint={hint} hintId={hintId} />
-      <input
-        id={name}
-        name={name}
-        type={type}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : hint ? hintId : undefined}
-        className={cn(base, tone(Boolean(error)))}
-        {...rest}
-      />
+      {prefix ? (
+        <span className={cn(base, tone(Boolean(error)), "flex items-center gap-1.5")}>
+          <span aria-hidden className="flex-none select-none opacity-55">
+            {prefix}
+          </span>
+          <input
+            id={name}
+            name={name}
+            type={type}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? errorId : hint ? hintId : undefined}
+            aria-label={`${label}, ${prefix}`}
+            className="w-full min-w-0 border-0 bg-transparent p-0 outline-none"
+            {...rest}
+          />
+        </span>
+      ) : (
+        <input
+          id={name}
+          name={name}
+          type={type}
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? errorId : hint ? hintId : undefined}
+          className={cn(base, tone(Boolean(error)))}
+          {...rest}
+        />
+      )}
       <FieldError id={errorId} error={error} />
     </div>
   );

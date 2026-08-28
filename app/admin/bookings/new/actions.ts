@@ -8,6 +8,7 @@ import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/boo
 import { prisma } from "@/lib/prisma";
 import { searchCustomers } from "@/lib/queries/admin";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type CustomerHit = {
   id: string;
@@ -54,10 +55,8 @@ const schema = z.object({
         .string()
         .trim()
         .min(1, "Phone number is required")
-        .refine((v) => {
-          const d = v.replace(/\D/g, "");
-          return d.length >= 10 && d.length <= 15;
-        }, "Enter a valid phone number"),
+        .refine(isValidPhone, "Enter a 10-digit mobile number")
+        .transform(toNationalDigits),
       city: z.string().trim().max(80).optional().or(z.literal("")),
       state: z.string().trim().max(80).optional().or(z.literal("")),
       gender: z.enum(["MALE", "FEMALE"]).optional().or(z.literal("")),

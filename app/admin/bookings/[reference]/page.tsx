@@ -30,6 +30,11 @@ export default async function AdminBookingPage({
 
   const status = BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
   const balancePaise = booking.totalPaise - booking.amountPaidPaise;
+  // Gateway fees collected on this booking. Never added to the balance —
+  // this money went straight to Razorpay and was never DOT's to keep.
+  const feesCollected = booking.payments
+    .filter((p) => p.status === "CAPTURED")
+    .reduce((n, p) => n + p.convenienceFeePaise, 0);
   const paymentState =
     booking.amountPaidPaise === 0 ? "UNPAID" : balancePaise <= 0 ? "PAID" : "PARTIAL";
   const pay = PAYMENT_TONE[paymentState];
@@ -105,6 +110,20 @@ export default async function AdminBookingPage({
                     <span className="font-display text-[1.05rem] font-semibold tabular-nums text-navy">
                       {formatINR(rupees(p.amountPaise))}
                     </span>
+                    {/* The split, only where there is one. A convenience fee
+                        is money in transit to the gateway, so the amount that
+                        reached this booking is smaller than the amount
+                        charged — and the difference has to be visible or the
+                        totals below look wrong. */}
+                    {p.convenienceFeePaise > 0 && (
+                      <span className="text-[0.8rem] text-[#8b96ad]">
+                        → booking{" "}
+                        <b className="font-medium text-[#16203a]">
+                          {formatINR(rupees(p.amountPaise - p.convenienceFeePaise))}
+                        </b>{" "}
+                        · fee {formatINR(rupees(p.convenienceFeePaise))}
+                      </span>
+                    )}
                     <Chip tone="mute">{METHOD_LABEL[p.method] ?? p.method}</Chip>
                     {p.status !== "CAPTURED" && <Chip tone="warn">{p.status}</Chip>}
                     <span className="text-[0.8rem] text-[#8b96ad]">
@@ -122,6 +141,24 @@ export default async function AdminBookingPage({
                   </li>
                 ))}
               </ul>
+            )}
+
+            {feesCollected > 0 && (
+              <div className="border-t border-[#eef1f6] px-5 py-3 text-[0.83rem]">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[#5a6785]">Toward this booking</span>
+                  <b className="tabular-nums text-[#16203a]">
+                    {formatINR(rupees(booking.amountPaidPaise))}
+                  </b>
+                </div>
+                {/* Deliberately below the booking total and greyed: this is
+                    not income. Seeing it beside the trip amount is what makes
+                    that obvious at a glance. */}
+                <div className="mt-1 flex items-baseline justify-between text-[#8b96ad]">
+                  <span>Convenience fees (passed to Razorpay)</span>
+                  <span className="tabular-nums">{formatINR(rupees(feesCollected))}</span>
+                </div>
+              </div>
             )}
           </Panel>
 

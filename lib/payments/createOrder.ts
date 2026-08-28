@@ -1,7 +1,13 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import {
+  buildReference,
+  computeConvenienceFee,
+  computePricing,
+  MAX_SEATS_PER_BOOKING,
+} from "@/lib/booking/pricing";
+import { currentFeeRateBp } from "@/lib/payments/convenienceFee";
 import { razorpay } from "@/lib/payments/client";
 
 /** Minutes a seat is held while the customer is inside Razorpay's checkout. */
@@ -30,7 +36,13 @@ export type OrderResult =
   | {
       ok: true;
       orderId: string;
+      /** GROSS — what Razorpay will charge. Booking amount plus the fee. */
       amountPaise: number;
+      /** The part that counts toward the trip. */
+      bookingAmountPaise: number;
+      /** Zero when the fee is switched off. */
+      convenienceFeePaise: number;
+      convenienceFeeRateBp: number;
       currency: string;
       reference: string;
       bookingId: string;
@@ -78,7 +90,7 @@ export async function createPaymentOrder(input: {
   }
 
   const trip = await prisma.trip.findFirst({
-    where: { slug, status: "PUBLISHED", deletedAt: null, endDate: { gte: new Date() } },
+    where: { slug, status: "PUBLISHED", isActive: true, deletedAt: null, endDate: { gte: new Date() } },
     select: {
       id: true, slug: true, title: true, startDate: true, razorpayEnabled: true,
       pricePaise: true, gstPercent: true, tcsPercent: true, advancePaise: true,
@@ -95,7 +107,13 @@ export async function createPaymentOrder(input: {
   // A trip with no advance can only be paid in full, whatever was asked for.
   const canPayAdvance = price.advanceDuePaise > 0 && price.balancePaise > 0;
   const kind: PayMode = canPayAdvance && input.payMode !== "FULL" ? "ADVANCE" : "FULL";
-  const amountPaise = kind === "ADVANCE" ? price.advanceDuePaise : price.totalPaise;
+  const bookingAmountPaise = kind === "ADVANCE" ? price.advanceDuePaise : price.totalPaise;
+
+  // The gateway's cut, on the amount being charged now. Read fresh each time
+  // rather than cached, so a rate change takes effect on the next checkout.
+  const rateBp = await currentFeeRateBp();
+  const fee = computeConvenienceFee(bookingAmountPaise, rateBp);
+  const amountPaise = fee.grossPaise;
 
   // ── Reuse before creating ────────────────────────────────────────────
   // A customer who abandons checkout and comes back must land on the SAME
@@ -121,7 +139,10 @@ export async function createPaymentOrder(input: {
         where: { status: "CREATED", razorpayOrderId: { not: null } },
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { id: true, razorpayOrderId: true, amountPaise: true },
+        select: {
+          id: true, razorpayOrderId: true, amountPaise: true,
+          convenienceFeePaise: true, convenienceFeeRateBp: true,
+        },
       },
     },
   });
@@ -159,6 +180,11 @@ export async function createPaymentOrder(input: {
       ok: true,
       orderId: reusable.orderId,
       amountPaise: reusable.booking.payments[0].amountPaise,
+      bookingAmountPaise:
+        reusable.booking.payments[0].amountPaise -
+        reusable.booking.payments[0].convenienceFeePaise,
+      convenienceFeePaise: reusable.booking.payments[0].convenienceFeePaise,
+      convenienceFeeRateBp: reusable.booking.payments[0].convenienceFeeRateBp ?? 0,
       currency: "INR",
       reference: reusable.booking.reference,
       bookingId: reusable.booking.id,
@@ -299,6 +325,10 @@ export async function createPaymentOrder(input: {
       tripTitle: trip.title,
       seats: String(seats),
       kind,
+      // So a refund or a dispute can be reconciled from their dashboard
+      // without opening ours.
+      bookingAmountPaise: String(bookingAmountPaise),
+      convenienceFeePaise: String(fee.feePaise),
     },
   });
 
@@ -309,6 +339,8 @@ export async function createPaymentOrder(input: {
       method: "RAZORPAY",
       status: "CREATED",
       amountPaise,
+      convenienceFeePaise: fee.feePaise,
+      convenienceFeeRateBp: fee.rateBp || null,
       currency: "INR",
       razorpayOrderId: order.id,
     },
@@ -318,6 +350,9 @@ export async function createPaymentOrder(input: {
     ok: true,
     orderId: order.id,
     amountPaise,
+    bookingAmountPaise,
+    convenienceFeePaise: fee.feePaise,
+    convenienceFeeRateBp: fee.rateBp,
     currency: "INR",
     reference: created.reference,
     bookingId: created.id,

@@ -6,11 +6,14 @@ import { AlertCircle, ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus } from 
 
 import type { BookableTrip } from "@/lib/queries/booking";
 import {
+  computeConvenienceFee,
   computePricing,
+  formatFeeRate,
   MAX_SEATS_PER_BOOKING,
   toRupees,
 } from "@/lib/booking/pricing";
 import { cn, formatDateRange, formatINR } from "@/lib/utils";
+import { PHONE_COUNTRY_CODE, sanitisePhoneInput } from "@/lib/phone";
 import { createBookingRequest } from "./actions";
 import { startPayment } from "./payActions";
 import { useRazorpayCheckout } from "@/components/booking/RazorpayCheckout";
@@ -21,7 +24,18 @@ type Customer = { fullName: string | null; email: string; phone: string | null }
 
 const blank = (): Traveller => ({ fullName: "", phone: "", email: "" });
 
-export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: Customer }) {
+/** The gateway's cut, passed down from the server so it can't be guessed. */
+type FeeConfig = { rateBp: number; label: string } | null;
+
+export function BookingForm({
+  trip,
+  customer,
+  fee,
+}: {
+  trip: BookableTrip;
+  customer: Customer;
+  fee: FeeConfig;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const checkout = useRazorpayCheckout();
@@ -64,7 +78,19 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
   const canChoose = price.advanceDuePaise > 0 && price.balancePaise > 0;
   const [payMode, setPayMode] = useState<"ADVANCE" | "FULL">("ADVANCE");
   const payFull = !canChoose || payMode === "FULL";
-  const payNowPaise = payFull ? price.totalPaise : price.advanceDuePaise;
+  const bookingNowPaise = payFull ? price.totalPaise : price.advanceDuePaise;
+
+  /**
+   * The convenience fee, on the amount being charged now.
+   *
+   * Computed with the same function the server uses and the rate it handed
+   * down, so the figure on the button is exactly what Razorpay will charge.
+   * Only applies to online payment — a trip the team collects by hand never
+   * shows one.
+   */
+  const feeRateBp = payOnline && fee ? fee.rateBp : 0;
+  const charge = computeConvenienceFee(bookingNowPaise, feeRateBp);
+  const payNowPaise = charge.grossPaise;
 
   // Jump to the first problem after the errors have actually rendered — with
   // three travellers on screen the bad field is often below the fold.
@@ -307,7 +333,8 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
                       onChange={(v) => patchTraveller(i, { phone: v })}
                       error={fieldErrors[`${i}.phone`]}
                       type="tel"
-                      placeholder="10-digit mobile"
+                      phone
+                      placeholder="98765 43210"
                     />
                     <Field
                       label="Email"
@@ -332,7 +359,14 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Name" value={emergencyName} onChange={setEmergencyName} placeholder="Optional" />
-                <Field label="Phone" value={emergencyPhone} onChange={setEmergencyPhone} type="tel" placeholder="Optional" />
+                <Field
+                  label="Phone"
+                  value={emergencyPhone}
+                  onChange={setEmergencyPhone}
+                  type="tel"
+                  phone
+                  placeholder="Optional"
+                />
               </div>
             </div>
 
@@ -443,6 +477,8 @@ export function BookingForm({ trip, customer }: { trip: BookableTrip; customer: 
         canChoose={canChoose}
         payFull={payFull}
         setPayMode={setPayMode}
+        charge={charge}
+        feeLabel={fee?.label ?? "Convenience fee"}
       />
     </div>
   );
@@ -478,6 +514,8 @@ function PriceSummary({
   canChoose,
   payFull,
   setPayMode,
+  charge,
+  feeLabel,
 }: {
   trip: BookableTrip;
   price: ReturnType<typeof computePricing>;
@@ -485,6 +523,8 @@ function PriceSummary({
   canChoose: boolean;
   payFull: boolean;
   setPayMode: (m: "ADVANCE" | "FULL") => void;
+  charge: ReturnType<typeof computeConvenienceFee>;
+  feeLabel: string;
 }) {
   return (
     <aside className="order-1 lg:order-2 lg:sticky lg:top-28">
@@ -519,6 +559,35 @@ function PriceSummary({
             </dd>
           </div>
         </dl>
+
+        {/* The fee, disclosed before payment.
+            RBI and card-network rules require the customer be told the amount
+            before the transaction — not merely on the receipt. It sits under
+            the pay-mode choice so it re-reads correctly when they switch
+            between advance and full. */}
+        {charge.feePaise > 0 && (
+          <div className="border-t border-cream/10 px-6 py-4">
+            <div className="flex items-baseline justify-between text-[0.85rem]">
+              <span className="text-cream/70">
+                {feeLabel}{" "}
+                <span className="text-cream/40">({formatFeeRate(charge.rateBp)})</span>
+              </span>
+              <span className="tabular-nums text-cream/85">
+                {formatINR(toRupees(charge.feePaise))}
+              </span>
+            </div>
+            <div className="mt-2.5 flex items-baseline justify-between border-t border-cream/15 pt-2.5">
+              <span className="font-medium">Pay now</span>
+              <b className="font-display text-xl tabular-nums text-yellow">
+                {formatINR(toRupees(charge.grossPaise))}
+              </b>
+            </div>
+            <p className="mt-2 text-[0.72rem] leading-snug text-cream/40">
+              Charged by the payment gateway on online payments. Pay us directly
+              and there&apos;s no fee.
+            </p>
+          </div>
+        )}
 
         {canChoose && (
           <fieldset className="border-t border-cream/10 bg-cream/[0.04] px-6 py-4">
@@ -601,7 +670,10 @@ function Field({
   required,
   error,
   className,
+  phone,
 }: {
+  /** Renders the country code beside the box and holds the value to 10 digits. */
+  phone?: boolean;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -617,17 +689,29 @@ function Field({
         {label}
         {required && <span className="ml-0.5 text-coral">*</span>}
       </span>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
+      <span
         className={cn(
-          "w-full rounded-xl border bg-white px-3.5 py-2.5 text-[0.92rem] text-navy outline-none transition focus:border-teal",
+          "flex w-full items-center gap-1.5 rounded-xl border bg-white px-3.5 py-2.5 text-[0.92rem] text-navy transition focus-within:border-teal",
           error ? "border-coral" : "border-navy/12",
         )}
-      />
+      >
+        {phone && (
+          <span aria-hidden className="flex-none select-none text-navy/45">
+            {PHONE_COUNTRY_CODE}
+          </span>
+        )}
+        <input
+          type={type}
+          value={value}
+          inputMode={phone ? "numeric" : undefined}
+          maxLength={phone ? 10 : undefined}
+          onChange={(e) => onChange(phone ? sanitisePhoneInput(e.target.value) : e.target.value)}
+          placeholder={placeholder}
+          aria-invalid={Boolean(error)}
+          aria-label={phone ? `${label}, ${PHONE_COUNTRY_CODE}` : undefined}
+          className="w-full min-w-0 border-0 bg-transparent p-0 outline-none"
+        />
+      </span>
       {error && <span className="mt-1 block text-[0.78rem] text-coral">{error}</span>}
     </label>
   );

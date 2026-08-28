@@ -73,17 +73,16 @@ export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
 };
 
 /**
- * Trip status, in the words the row menu uses.
+ * Where a trip is in its editorial life.
  *
- * These read Active/Inactive rather than Live/Draft so the badge, the
- * Status filter and the Activate/Deactivate action all describe the same
- * thing the same way. "Inactive" covers a trip still being written and one
- * deliberately taken down — from the site's point of view they are
- * identical, and the distinction was never actionable here.
+ * Distinct from `isActive`, which is the master on/off switch and outranks
+ * this. A trip must be BOTH live and active to appear on the site — so a
+ * finished trip can be pulled temporarily without being demoted back to
+ * Draft and losing the fact that it was ever finished.
  */
 export const TRIP_TONE: Record<string, { tone: string; label: string }> = {
-  PUBLISHED: { tone: "ok", label: "Active" },
-  DRAFT: { tone: "warn", label: "Inactive" },
+  PUBLISHED: { tone: "ok", label: "Live on site" },
+  DRAFT: { tone: "warn", label: "Draft" },
   ARCHIVED: { tone: "mute", label: "Archived" },
 };
 

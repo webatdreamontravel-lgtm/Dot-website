@@ -209,7 +209,7 @@ model Trip {
   // ── Behaviour toggles (the per-trip config) ──
   /// false => booking form records a REQUESTED booking and emails both
   /// sides instead of opening Razorpay. Same booking row either way.
-  razorpayEnabled   Boolean @default(false) @map("razorpay_enabled")
+  razorpayEnabled   Boolean @default(true) @map("razorpay_enabled")
   autoCloseWhenFull Boolean @default(true)  @map("auto_close_when_full")
   showSeatsLeft     Boolean @default(true)  @map("show_seats_left")
   waitlistEnabled   Boolean @default(false) @map("waitlist_enabled")
@@ -228,7 +228,15 @@ model Trip {
   cancellationPolicy Json? @map("cancellation_policy")
 
   // ── Publishing ──
+  /// Where the trip is in its editorial life: being written, finished,
+  /// or retired.
   status      TripStatus @default(DRAFT)
+  /// The master switch, and it outranks `status`. An inactive trip is
+  /// invisible on the site even when PUBLISHED — which is how a finished
+  /// trip gets pulled temporarily without being demoted back to DRAFT and
+  /// losing the distinction between "still being written" and "taken down".
+  /// A trip must be BOTH published and active to appear anywhere public.
+  isActive    Boolean    @default(true) @map("is_active")
   isFeatured  Boolean    @default(false) @map("is_featured")
   publishedAt DateTime?  @map("published_at") @db.Timestamptz(3)
 
@@ -243,6 +251,7 @@ model Trip {
   enquiries    Enquiry[]
 
   @@index([status, startDate])
+  @@index([isActive, status, startDate])
   @@index([category])
   @@index([isFeatured])
   @@map("trips")
@@ -430,9 +439,20 @@ model Payment {
 
   method PaymentMethod
   status PaymentStatus @default(CREATED)
-  /// Always positive. Refunds are tracked via refundedPaise + status.
+  /// GROSS — what the customer was actually charged, including any
+  /// convenience fee. The part that counts toward the booking is
+  /// (amountPaise - convenienceFeePaise); never credit the gross, or an
+  /// online booking looks overpaid and the balance drifts.
   amountPaise Int    @map("amount_paise")
   currency    String @default("INR")
+
+  /// The payment-gateway fee passed on to the customer. Zero for cash, bank
+  /// transfer and anything the team collects by hand — those cost nothing to
+  /// process. Money in transit to Razorpay, not income.
+  convenienceFeePaise  Int  @default(0) @map("convenience_fee_paise")
+  /// Basis points, snapshotted at charge time. 236 = 2.36%. Changing the
+  /// rate later must not rewrite what an old payment charged.
+  convenienceFeeRateBp Int? @map("convenience_fee_rate_bp")
 
   // ── Razorpay correlation ──
   razorpayOrderId   String? @unique @map("razorpay_order_id")

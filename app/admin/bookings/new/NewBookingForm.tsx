@@ -1,5 +1,7 @@
 "use client";
 
+import { PhoneInput } from "@/components/shared/PhoneInput";
+
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { AlertCircle, Check, Loader2, Minus, Plus, Search, UserPlus, X } from "lucide-react";
@@ -221,7 +223,11 @@ export function NewBookingForm({
                   <input value={fresh.email} onChange={(e) => setFresh({ ...fresh, email: e.target.value })} type="email" className={control} placeholder="they@example.com" />
                 </Field>
                 <Field label="Phone">
-                  <input value={fresh.phone} onChange={(e) => setFresh({ ...fresh, phone: e.target.value })} type="tel" className={control} placeholder="10-digit mobile" />
+                  <PhoneInput
+                    value={fresh.phone}
+                    onChange={(v) => setFresh({ ...fresh, phone: v })}
+                    className={control}
+                  />
                 </Field>
                 <Field label="City">
                   <select value={fresh.city} onChange={(e) => setFresh({ ...fresh, city: e.target.value })} className={control}>
@@ -342,7 +348,11 @@ export function NewBookingForm({
                   </p>
                   <div className="grid gap-2.5 sm:grid-cols-3">
                     <input value={t.fullName} onChange={(e) => patchTraveller(i, { fullName: e.target.value })} placeholder="Full name" className={control} />
-                    <input value={t.phone} onChange={(e) => patchTraveller(i, { phone: e.target.value })} placeholder="Phone" className={control} />
+                    <PhoneInput
+                      value={t.phone}
+                      onChange={(v) => patchTraveller(i, { phone: v })}
+                      className={control}
+                    />
                     <input value={t.email} onChange={(e) => patchTraveller(i, { email: e.target.value })} placeholder="Email" className={control} />
                   </div>
                 </div>

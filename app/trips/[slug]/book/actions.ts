@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getSessionProfile } from "@/lib/auth";
 import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
 import { prisma } from "@/lib/prisma";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type BookingResult =
   | { ok: true; reference: string }
@@ -26,10 +27,10 @@ const travellerSchema = z.object({
     .min(1, "Phone number is required")
     // Deliberately loose on formatting and strict on substance: +91, spaces
     // and dashes are all fine, but there must be a real number in there.
-    .refine((v) => {
-      const digits = v.replace(/\D/g, "");
-      return digits.length >= 10 && digits.length <= 15;
-    }, "Enter a valid phone number"),
+    .refine(isValidPhone, "Enter a 10-digit mobile number")
+    // Stored as ten national digits, so the same number can never arrive
+    // as three different strings.
+    .transform(toNationalDigits),
   email: z.string().trim().min(1, "Email is required").email("Enter a valid email address").max(160),
 });
 
@@ -107,7 +108,7 @@ export async function createBookingRequest(
   }
 
   const trip = await prisma.trip.findFirst({
-    where: { slug: data.slug, status: "PUBLISHED", deletedAt: null, endDate: { gte: new Date() } },
+    where: { slug: data.slug, status: "PUBLISHED", isActive: true, deletedAt: null, endDate: { gte: new Date() } },
     select: {
       id: true, slug: true, title: true, startDate: true,
       pricePaise: true, gstPercent: true, tcsPercent: true, advancePaise: true,
