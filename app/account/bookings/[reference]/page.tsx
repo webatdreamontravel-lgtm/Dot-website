@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Check, MessageCircle } from "lucide-react";
+import { ArrowLeft, Check, MessageCircle, RotateCcw } from "lucide-react";
 
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { requireUser } from "@/lib/auth";
 import { toRupees } from "@/lib/booking/pricing";
 import { getBookingForCustomer } from "@/lib/queries/booking";
+import { canPayBalanceOnline, customerStatus, REFUND_NOTICE } from "@/lib/booking/customerStatus";
 import { siteConfig } from "@/lib/data/siteConfig";
 import { formatDateRange, formatINR } from "@/lib/utils";
+import { BalancePayment } from "./BalancePayment";
 
 type Params = {
   params: Promise<{ reference: string }>;
@@ -17,79 +19,6 @@ type Params = {
 };
 
 export const metadata: Metadata = { title: "Your booking", robots: { index: false } };
-
-const STATUS_COPY: Record<string, { label: string; tone: string; body: string }> = {
-  REQUESTED: {
-    label: "Request received",
-    tone: "bg-yellow text-navy",
-    body: "Your seats are held. Our team will contact you to arrange payment and confirm.",
-  },
-  PENDING_PAYMENT: {
-    label: "Awaiting payment",
-    tone: "bg-yellow text-navy",
-    body: "Your seats are held until payment comes through.",
-  },
-  CONFIRMED: {
-    label: "Confirmed",
-    tone: "bg-teal text-cream",
-    body: "You're in. We'll add you to the trip WhatsApp group before departure.",
-  },
-  CANCELLED: { label: "Cancelled", tone: "bg-coral text-cream", body: "This booking was cancelled." },
-  REFUNDED: { label: "Refunded", tone: "bg-navy/10 text-navy", body: "This booking was refunded." },
-  EXPIRED: {
-    label: "Expired",
-    tone: "bg-navy/10 text-navy",
-    /**
-     * Written for two readers at once.
-     *
-     * Usually this is someone who abandoned checkout, and the first sentence
-     * is all they need. But a payment can reach us late — the bank
-     * authorises after our hold lapsed, or the gateway retries a failed
-     * delivery for up to 24 hours — and in that window this page is the
-     * first thing a customer who HAS paid will look at. "The seats were
-     * released" reads as "your money is gone", so the second sentence is
-     * there for them. It confirms itself: when the payment lands the status
-     * flips to Confirmed and they get the usual email.
-     */
-    body:
-      "We didn't receive payment in time, so the seats were released. If you did pay, " +
-      "it can occasionally take a few minutes to reach us — we'll confirm and email you " +
-      "as soon as it does.",
-  },
-};
-
-/**
- * The status shown to the customer.
- *
- * REQUESTED means two very different things depending on whether money has
- * arrived. Normally it's a booking the team will ring about to collect
- * payment. But it is also where a booking lands when a payment came through
- * *after* the seat hold expired and the trip had filled — and telling
- * someone who has just paid ₹1,013 that "our team will contact you to
- * arrange payment" is both wrong and alarming.
- *
- * The amount paid is what tells the two apart.
- */
-function statusFor(bookingStatus: string, amountPaidPaise: number) {
-  if (bookingStatus === "REQUESTED" && amountPaidPaise > 0) {
-    return {
-      label: "Payment received",
-      tone: "bg-yellow text-navy",
-      body:
-        "We have your payment, but the last seat was taken moments before it reached us. " +
-        "That's on us — one of us will call you within one working day with a seat on the " +
-        "next departure or a full refund. Your money is safe in the meantime.",
-    };
-  }
-
-  return (
-    STATUS_COPY[bookingStatus] ?? {
-      label: bookingStatus,
-      tone: "bg-navy/10 text-navy",
-      body: "",
-    }
-  );
-}
 
 export default async function BookingDetailPage({ params, searchParams }: Params) {
   const { reference } = await params;
@@ -99,11 +28,12 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   const booking = await getBookingForCustomer(reference, profile.id);
   if (!booking) notFound();
 
-  const status = statusFor(booking.status, booking.amountPaidPaise);
+  const status = customerStatus(booking);
   const advanceDuePaise = (booking.trip.advancePaise ?? 0) * booking.seats;
   const balancePaise = booking.totalPaise - booking.amountPaidPaise;
-  // What the gateway took on top. Not part of the trip price, and not
-  // counted toward the balance — but it did leave their account.
+
+  const canPayBalance = canPayBalanceOnline(booking);
+
   const feesCharged = booking.payments
     .filter((p) => p.status === "CAPTURED")
     .reduce((n, p) => n + p.convenienceFeePaise, 0);
@@ -144,7 +74,6 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                   {booking.trip.title}
                 </h1>
                 <p className="mt-1 text-[0.88rem] text-navy/60">
-                  {booking.trip.batchName && <span>{booking.trip.batchName} · </span>}
                   {formatDateRange(
                     booking.trip.startDate.toISOString(),
                     booking.trip.endDate.toISOString(),
@@ -164,16 +93,62 @@ export default async function BookingDetailPage({ params, searchParams }: Params
               </p>
             )}
 
+            {/* Any booking with money back on it, whatever its status. The
+                week of bank silence after a refund is sent is the same
+                whether it followed a cancellation, a repricing or a goodwill
+                gesture — so this is keyed on the refund existing, not on why
+                it happened.
+
+                Teal, not coral: a refund is money returning to the customer,
+                not something that went wrong. Red here would make everyone
+                who reads it think their booking had failed — and it would
+                spend the one colour this page reserves for actual problems on
+                a message that is, on balance, good news. */}
+            {booking.refundedPaise > 0 && (
+              <div className="flex items-start gap-3 border-b border-navy/8 bg-teal/[0.07] px-6 py-4 md:px-8">
+                <span className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-full bg-teal text-cream">
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                </span>
+                <p className="text-[0.85rem] leading-relaxed text-navy/70">
+                  <span className="font-semibold text-navy">
+                    {formatINR(toRupees(booking.refundedPaise))} refunded.
+                  </span>{" "}
+                  {REFUND_NOTICE}
+                </p>
+              </div>
+            )}
+
             <section className="px-6 py-6 md:px-8">
               <h2 className="text-[0.75rem] font-semibold uppercase tracking-[0.11em] text-navy/45">
                 Travellers
               </h2>
               <ul className="mt-3 flex flex-col gap-2.5">
                 {booking.travellers.map((t, i) => (
-                  <li key={i} className="flex flex-wrap items-baseline gap-x-3">
-                    <span className="font-medium text-navy">{t.fullName}</span>
+                  <li
+                    key={i}
+                    className={`flex flex-wrap items-baseline gap-x-3 ${
+                      t.cancelledAt ? "text-navy/40" : ""
+                    }`}
+                  >
+                    <span
+                      className={
+                        t.cancelledAt
+                          ? "font-medium text-navy/45 line-through decoration-navy/30"
+                          : "font-medium text-navy"
+                      }
+                    >
+                      {t.fullName}
+                    </span>
+                    {/* Named rather than quietly removed. Two names beside a
+                        total that used to cover three reads as a billing
+                        error until you can see which person came off. */}
+                    {t.cancelledAt && (
+                      <span className="rounded-full bg-navy/[0.07] px-2 py-0.5 text-[0.7rem] font-semibold uppercase tracking-wide text-navy/50">
+                        Cancelled
+                      </span>
+                    )}
                     {(t.phone || t.email) && (
-                      <span className="text-[0.85rem] text-navy/50">
+                      <span className={`text-[0.85rem] ${t.cancelledAt ? "text-navy/35" : "text-navy/50"}`}>
                         {[t.phone, t.email].filter(Boolean).join(" · ")}
                       </span>
                     )}
@@ -217,7 +192,17 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                   </dd>
                 </div>
                 {booking.amountPaidPaise > 0 && (
-                  <Line label="Paid" value={formatINR(toRupees(booking.amountPaidPaise))} />
+                  <Line label="You paid" value={formatINR(toRupees(booking.amountPaidPaise))} />
+                )}
+
+                {/* Money already sent back. Absent from this page entirely
+                    until now, so a customer who had been refunded ₹2,000 saw
+                    only "You paid ₹6,300" and no sign of it. */}
+                {booking.refundedPaise > 0 && (
+                  <Line
+                    label="Refunded to you"
+                    value={`− ${formatINR(toRupees(booking.refundedPaise))}`}
+                  />
                 )}
 
                 {/* Razorpay adds its own fee at checkout, so the card
@@ -250,6 +235,23 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                         )}
                       </b>
                     </div>
+
+                    {/* The point of the whole reminder: somewhere to actually
+                        pay. Only shown once an advance has landed — before
+                        that the booking flow itself is where they pay, and
+                        two payment buttons on one screen is one too many. */}
+                    {canPayBalance && (
+                      <BalancePayment
+                        reference={booking.reference}
+                        balancePaise={balancePaise}
+                        tripTitle={booking.trip.title}
+                        customer={{
+                          name: profile.fullName,
+                          email: profile.email,
+                          phone: profile.phone,
+                        }}
+                      />
+                    )}
                   </div>
                 )}
               </dl>

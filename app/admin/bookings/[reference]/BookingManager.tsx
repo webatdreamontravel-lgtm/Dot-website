@@ -16,6 +16,7 @@ import {
   cancelSeat,
   recordPayment,
   refundBooking,
+  sendBalanceReminderNow,
   updateBookingDetails,
   updateBookingStatus,
   type ActionResult,
@@ -149,21 +150,49 @@ export function PaymentPanel({
   );
 }
 
+/**
+ * What the customer is told when a status changes.
+ *
+ * Mirrors notifyStatusChange() in lib/booking/notify.ts. Kept in the same
+ * words so the person clicking the button knows exactly what lands in
+ * someone's inbox — a status change is no longer a private bookkeeping
+ * edit, and an admin who doesn't realise that will send a cancellation
+ * notice by picking the wrong row in a dropdown.
+ */
+const STATUS_EMAIL: Record<string, string> = {
+  CONFIRMED: "a booking confirmation",
+  CANCELLED: "a cancellation notice",
+};
+
 export function StatusPanel({
   bookingId,
   status,
   seatsCounted,
+  customerEmail,
 }: {
   bookingId: string;
   status: string;
   seatsCounted: boolean;
+  /** Shown on the confirm step so nobody emails the wrong person. */
+  customerEmail: string | null;
 }) {
   const { run, pending, error } = useAction();
   const [next, setNext] = useState(status);
   const [reason, setReason] = useState("");
+  /**
+   * The second click.
+   *
+   * Deliberately a step in the panel rather than window.confirm(): a native
+   * dialog can only carry one line of text, and the thing worth reading here
+   * is a list — the seat movement, the email, and who it goes to. It also
+   * resets whenever the chosen status changes, so a confirmation can never
+   * be left over from a status the admin has since changed their mind about.
+   */
+  const [confirming, setConfirming] = useState(false);
 
   const cancelling = next === "CANCELLED";
   const changed = next !== status;
+  const willEmail = STATUS_EMAIL[next];
 
   return (
     <Panel title="Status">
@@ -171,7 +200,15 @@ export function StatusPanel({
         {error && <ErrorNote>{error}</ErrorNote>}
 
         <Field label="Booking status">
-          <Select value={next} onChange={setNext} options={STATUSES} />
+          <Select
+            value={next}
+            onChange={(v) => {
+              setNext(v);
+              // Changing the target invalidates anything already confirmed.
+              setConfirming(false);
+            }}
+            options={STATUSES}
+          />
         </Field>
 
         {cancelling && (
@@ -192,15 +229,80 @@ export function StatusPanel({
           </p>
         )}
 
-        <button
-          type="button"
-          onClick={() => run(() => updateBookingStatus({ bookingId, status: next as "CONFIRMED", reason }))}
-          disabled={pending || !changed}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
-        >
-          {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Update status
-        </button>
+        {changed && (
+          <p
+            className={`mt-2 rounded-lg px-3 py-2 text-[0.8rem] leading-relaxed ${
+              willEmail ? "bg-[#eaf4ef] text-[#0f5c3f]" : "bg-[#f2f4f7] text-[#5a6785]"
+            }`}
+          >
+            {willEmail ? (
+              <>
+                <strong>{customerEmail ?? "The customer"}</strong> will be emailed {willEmail}.
+              </>
+            ) : (
+              "No email will be sent — this status is internal bookkeeping."
+            )}
+          </p>
+        )}
+
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={pending || !changed}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
+          >
+            Update status
+          </button>
+        ) : (
+          <div className="mt-4 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
+            <p className="text-[0.85rem] leading-relaxed text-[#16203a]">
+              Change status to <strong>{BOOKING_TONE[next]?.label ?? next}</strong>
+              {willEmail ? (
+                <>
+                  {" "}
+                  and email {customerEmail ?? "the customer"} {willEmail}?
+                </>
+              ) : (
+                "?"
+              )}
+            </p>
+            {willEmail && (
+              <p className="mt-1 text-[0.78rem] text-[#8b96ad]">
+                This can&apos;t be unsent.
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  run(async () => {
+                    const res = await updateBookingStatus({
+                      bookingId,
+                      status: next as "CONFIRMED",
+                      reason,
+                    });
+                    if (res.ok) setConfirming(false);
+                    return res;
+                  })
+                }
+                disabled={pending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
+              >
+                {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {willEmail ? "Update & send email" : "Update status"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={pending}
+                className="rounded-lg border border-[#e3e7ee] px-3.5 py-2 text-[0.85rem] font-medium text-[#5a6785] hover:bg-[#f6f7f9] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Panel>
   );
@@ -442,16 +544,31 @@ export function RefundPanel({
   refundablePaise,
   pendingPaise,
   refundedPaise,
+  owedPaise,
   hasOnlinePayment,
 }: {
   reference: string;
+  /** The CEILING — every rupee still sitting with us on this booking. */
   refundablePaise: number;
   pendingPaise: number;
   refundedPaise: number;
+  /**
+   * What we actually owe: money held above what the booking costs.
+   *
+   * Distinct from refundablePaise, and the distinction matters. On a booking
+   * that took ₹6,300, refunded ₹2,000 and now costs ₹4,200, we CAN send back
+   * ₹4,300 and we OWE ₹100. The panel used to show only the ceiling, labelled
+   * "Left to refund" — refund what it suggested and the booking is ₹4,200
+   * short with two people still travelling.
+   */
+  owedPaise: number;
   hasOnlinePayment: boolean;
 }) {
   const { run, pending, error } = useAction();
-  const [amount, setAmount] = useState("");
+  // Starts at what is actually owed, not the ceiling — the common case is
+  // returning exactly the overpayment, and a blank box invites typing the
+  // bigger number sitting right above it.
+  const [amount, setAmount] = useState(owedPaise > 0 ? String(owedPaise / 100) : "");
   const [reason, setReason] = useState("");
   const [confirming, setConfirming] = useState(false);
 
@@ -487,10 +604,26 @@ export function RefundPanel({
           </div>
         )}
         <div className="flex justify-between border-t border-[#eef1f6] pt-1">
-          <dt className="text-[#5a6785]">Left to refund</dt>
+          <dt className="text-[#5a6785]">Can refund (max)</dt>
           <dd className="font-semibold tabular-nums text-[#16203a]">{formatINR(toRupees(refundablePaise))}</dd>
         </div>
+        {owedPaise > 0 && (
+          <div className="flex justify-between">
+            <dt className="font-medium text-[#b26a00]">Owed to the customer</dt>
+            <dd className="font-semibold tabular-nums text-[#b26a00]">
+              {formatINR(toRupees(owedPaise))}
+            </dd>
+          </div>
+        )}
       </dl>
+
+      {owedPaise > 0 && (
+        <p className="mt-2 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] leading-relaxed text-[#7a4a00]">
+          This booking is holding {formatINR(toRupees(owedPaise))} more than it costs — usually
+          because a traveller came off and it was repriced. Refunding more than that leaves it
+          underpaid.
+        </p>
+      )}
 
       {refundablePaise <= 0 ? (
         <p className="mt-3 text-[0.83rem] text-[#5a6785]">
@@ -557,6 +690,76 @@ export function RefundPanel({
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+/**
+ * "Nudge them now" — the manual counterpart to the nightly reminder.
+ *
+ * Sends the same email the cron would, so a customer never receives two
+ * different-looking chases for the same money. Shown only when there is
+ * actually a balance: a button whose only possible outcome is "nothing to
+ * do" is worse than no button.
+ */
+export function ReminderPanel({
+  reference,
+  balancePaise,
+  lastSentAt,
+}: {
+  reference: string;
+  balancePaise: number;
+  /** When a reminder last went out, so nobody nudges blind. */
+  lastSentAt: Date | null;
+}) {
+  const { run, pending, error } = useAction();
+  /**
+   * The server's own words, shown as-is.
+   *
+   * It has two things to say — the reminder went to this address, or one had
+   * already gone today and nothing was sent again. Reconstructing either from
+   * a fragment here would mean the second click reporting a send that never
+   * happened.
+   */
+  const [note, setNote] = useState<string | null>(null);
+
+  if (balancePaise <= 0) return null;
+
+  return (
+    <section className="rounded-[14px] border border-[#e3e7ee] bg-white p-5 shadow-sm">
+      <h2 className="text-[0.95rem] font-semibold text-[#16203a]">Balance reminder</h2>
+      <p className="mt-1.5 text-[0.83rem] leading-relaxed text-[#5a6785]">
+        {formatINR(toRupees(balancePaise))} outstanding. Reminders go out on their own as
+        the trip approaches — this sends one now.
+      </p>
+
+      <p className="mt-2 text-[0.78rem] text-[#8b96ad]">
+        {lastSentAt
+          ? `Last sent ${lastSentAt.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
+          : "No reminder sent yet."}
+      </p>
+
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {note && <p className="mt-2 text-[0.83rem] font-medium text-[#0f7a55]">{note}</p>}
+
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() =>
+          run(async () => {
+            const res = await sendBalanceReminderNow(reference);
+            if (res.ok) setNote(res.info ?? "Reminder sent.");
+            return res;
+          })
+        }
+        className="mt-3 w-full rounded-lg border border-[#e3e7ee] bg-[#f6f7f9] px-3.5 py-2 text-[0.85rem] font-medium text-[#16203a] transition hover:bg-[#eef1f6] disabled:opacity-60"
+      >
+        {pending ? "Sending…" : "Send reminder now"}
+      </button>
+
+      <p className="mt-2 text-[0.72rem] leading-snug text-[#8b96ad]">
+        One per day — clicking twice won&apos;t send twice.
+      </p>
     </section>
   );
 }

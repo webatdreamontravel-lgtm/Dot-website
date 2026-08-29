@@ -47,7 +47,6 @@ export default async function BookTripPage({ params }: Params) {
           </h1>
           <p className="mt-1.5 text-navy/60">
             {trip.title}
-            {trip.batchName && <span className="text-navy/45"> · {trip.batchName}</span>}
           </p>
 
           {trip.seatsAvailable === 0 ? (

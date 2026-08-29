@@ -63,6 +63,16 @@ for (const b of bookings) {
     `        └ payment ${p.status.padEnd(9)} ${r(p.amount_paise).padStart(9)}  ` +
     `${p.razorpay_order_id ?? '—'}  ${p.razorpay_payment_id ?? '(unpaid)'}  ${time(p.captured_at)}`));
 
+  // The advance/balance schedule. Only written when someone pays an advance,
+  // so its absence on a paid-in-full booking is correct, not a missing row.
+  const inst = (await c.query(
+    `SELECT sequence, label, amount_paise, status::text, due_date, paid_at
+       FROM booking_instalments WHERE booking_id = $1 ORDER BY sequence`, [b.id])).rows;
+  inst.forEach(i => console.log(
+    `        └ instal ${String(i.sequence)}. ${i.label.padEnd(8)} ${r(i.amount_paise).padStart(9)}  ` +
+    `${i.status.padEnd(8)} due ${new Date(i.due_date).toISOString().slice(0,10)}` +
+    `${i.paid_at ? '  paid ' + time(i.paid_at) : ''}`));
+
   const refs = (await c.query(
     `SELECT status::text, amount_paise, razorpay_refund_id, processed_at
        FROM refunds WHERE booking_id = $1 ORDER BY created_at`, [b.id])).rows;
