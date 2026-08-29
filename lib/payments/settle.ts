@@ -61,18 +61,29 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
     return { ok: false, error: `No payment found for order ${input.orderId}`, code: "UNKNOWN_ORDER" };
   }
 
-  // Razorpay is the authority on what was actually charged, but a mismatch
-  // means our record and their record disagree, and quietly trusting either
-  // one would corrupt the booking's balance. Refuse and let a human look.
-  if (input.amountPaise !== payment.amountPaise) {
+  /**
+   * A captured amount that is LARGER than the order is expected, not an error.
+   *
+   * Razorpay's "Customer pays the fee" setting adds their platform fee at
+   * checkout, so the customer is charged more than the order we created. The
+   * extra is theirs, not ours — we are settled the order amount either way.
+   *
+   * Being charged LESS is a genuine disagreement and still refused: it would
+   * mean crediting a booking with money that never arrived.
+   */
+  if (input.amountPaise < payment.amountPaise) {
     return {
       ok: false,
       code: "AMOUNT_MISMATCH",
       error:
-        `Order ${input.orderId} was for ${payment.amountPaise} paise but ` +
+        `Order ${input.orderId} was for ${payment.amountPaise} paise but only ` +
         `${input.amountPaise} was captured.`,
     };
   }
+
+  // Whatever the customer was charged above the order amount is the gateway's
+  // fee. Recorded for visibility; never credited to the booking.
+  const gatewayFeePaise = Math.max(input.amountPaise - payment.amountPaise, 0);
 
   const outcome = await prisma.$transaction(async (tx) => {
     // ── The claim. Whoever changes a row here owns the settlement. ──
@@ -83,6 +94,8 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
         razorpayPaymentId: input.paymentId,
         signatureVerified: input.signatureVerified,
         capturedAt: new Date(),
+        // What the customer paid on top, per Razorpay's fee-bearer setting.
+        convenienceFeePaise: gatewayFeePaise,
         notes: input.methodLabel ? `Paid by ${input.methodLabel}` : null,
       },
     });
@@ -141,15 +154,18 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
     }
 
     /**
-     * Credit the booking with what it is owed, NOT what the card was charged.
+     * Credit the ORDER amount, not what the card was charged.
      *
-     * amountPaise is the gross and includes the convenience fee, which is
-     * money in transit to Razorpay. Adding the gross here would make every
-     * online booking look overpaid by the fee, leave a permanent phantom
-     * balance, and make bookings_refund_within_paid guard a number that was
-     * never ours to refund.
+     * With Razorpay bearing-the-fee-to-customer, the captured amount includes
+     * their platform fee — money that goes to them, not to us. Crediting it
+     * would make every online booking look overpaid, leave a permanent
+     * phantom balance, and have bookings_refund_within_paid guard a figure
+     * that was never ours to refund.
+     *
+     * payment.amountPaise is what WE created the order for, so it is right
+     * regardless of what the gateway added on top.
      */
-    const paid = booking.amountPaidPaise + (input.amountPaise - payment.convenienceFeePaise);
+    const paid = booking.amountPaidPaise + payment.amountPaise;
 
     await tx.booking.update({
       where: { id: booking.id },

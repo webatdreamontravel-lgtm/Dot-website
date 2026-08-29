@@ -4,11 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { requireAdmin } from "@/lib/auth";
-import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import {computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
 import { prisma } from "@/lib/prisma";
 import { searchCustomers } from "@/lib/queries/admin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
+import { nextBookingReference } from "@/lib/booking/reference";
 
 export type CustomerHit = {
   id: string;
@@ -133,8 +134,9 @@ export async function createBookingForCustomer(
       const [{ reserve_seats: holdId }] = await tx.$queryRaw<{ reserve_seats: string }[]>`
         SELECT reserve_seats(${trip.id}::uuid, ${profileId}::uuid, ${d.seats}::int, 15::int)`;
 
-      const sequence = (await tx.booking.count({ where: { tripId: trip.id } })) + 1;
-      const ref = buildReference(trip.slug, trip.startDate, sequence);
+      // From the highest existing reference, not a row count — a gap in the
+      // sequence would collide with a reference already in use.
+      const ref = await nextBookingReference(tx, trip);
 
       const booking = await tx.booking.create({
         data: {

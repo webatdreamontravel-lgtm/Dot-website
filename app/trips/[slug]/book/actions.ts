@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { getSessionProfile } from "@/lib/auth";
-import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { nextBookingReference } from "@/lib/booking/reference";
 import { prisma } from "@/lib/prisma";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
@@ -128,10 +129,11 @@ export async function createBookingRequest(
       const [{ reserve_seats: holdId }] = await tx.$queryRaw<{ reserve_seats: string }[]>`
         SELECT reserve_seats(${trip.id}::uuid, ${profile.id}::uuid, ${data.seats}::int, 15::int)`;
 
-      // Safe to count inside the lock: no other booking for this trip can
-      // commit until this transaction ends, so the sequence can't collide.
-      const sequence = (await tx.booking.count({ where: { tripId: trip.id } })) + 1;
-      const ref = buildReference(trip.slug, trip.startDate, sequence);
+      // Inside the trip lock, so no concurrent booking can read the same
+      // maximum. Derived from the highest existing reference rather than a
+      // row count: a gap in the sequence makes a count collide with a
+      // reference that is already taken.
+      const ref = await nextBookingReference(tx, trip);
 
       const booking = await tx.booking.create({
         data: {

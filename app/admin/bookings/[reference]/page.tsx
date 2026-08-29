@@ -30,8 +30,10 @@ export default async function AdminBookingPage({
 
   const status = BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
   const balancePaise = booking.totalPaise - booking.amountPaidPaise;
-  // Gateway fees collected on this booking. Never added to the balance —
-  // this money went straight to Razorpay and was never DOT's to keep.
+  // What customers paid ON TOP, per Razorpay's "customer pays the fee"
+  // setting. Never added to the balance — this went straight to Razorpay and
+  // was never DOT's. Zero for cash and for anything paid before the setting
+  // was switched on.
   const feesCollected = booking.payments
     .filter((p) => p.status === "CAPTURED")
     .reduce((n, p) => n + p.convenienceFeePaise, 0);
@@ -155,7 +157,7 @@ export default async function AdminBookingPage({
                     not income. Seeing it beside the trip amount is what makes
                     that obvious at a glance. */}
                 <div className="mt-1 flex items-baseline justify-between text-[#8b96ad]">
-                  <span>Convenience fees (passed to Razorpay)</span>
+                  <span>Razorpay fee paid by customers</span>
                   <span className="tabular-nums">{formatINR(rupees(feesCollected))}</span>
                 </div>
               </div>

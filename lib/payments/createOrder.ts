@@ -1,13 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import {
-  buildReference,
-  computeConvenienceFee,
-  computePricing,
-  MAX_SEATS_PER_BOOKING,
-} from "@/lib/booking/pricing";
-import { currentFeeRateBp } from "@/lib/payments/convenienceFee";
+import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { nextBookingReference } from "@/lib/booking/reference";
 import { razorpay } from "@/lib/payments/client";
 
 /** Minutes a seat is held while the customer is inside Razorpay's checkout. */
@@ -107,13 +102,16 @@ export async function createPaymentOrder(input: {
   // A trip with no advance can only be paid in full, whatever was asked for.
   const canPayAdvance = price.advanceDuePaise > 0 && price.balancePaise > 0;
   const kind: PayMode = canPayAdvance && input.payMode !== "FULL" ? "ADVANCE" : "FULL";
-  const bookingAmountPaise = kind === "ADVANCE" ? price.advanceDuePaise : price.totalPaise;
-
-  // The gateway's cut, on the amount being charged now. Read fresh each time
-  // rather than cached, so a rate change takes effect on the next checkout.
-  const rateBp = await currentFeeRateBp();
-  const fee = computeConvenienceFee(bookingAmountPaise, rateBp);
-  const amountPaise = fee.grossPaise;
+  /**
+   * The order is created for what the TRIP costs, and nothing more.
+   *
+   * Razorpay's "Customer pays the fee" setting adds their platform fee on top
+   * at checkout and shows the customer the breakdown themselves. Adding our
+   * own fee here as well would charge it twice. The order amount stays the
+   * booking amount; Razorpay handles the rest.
+   */
+  const amountPaise = kind === "ADVANCE" ? price.advanceDuePaise : price.totalPaise;
+  const bookingAmountPaise = amountPaise;
 
   // ── Reuse before creating ────────────────────────────────────────────
   // A customer who abandons checkout and comes back must land on the SAME
@@ -235,8 +233,10 @@ export async function createPaymentOrder(input: {
       const [{ reserve_seats: holdId }] = await tx.$queryRaw<{ reserve_seats: string }[]>`
         SELECT reserve_seats(${trip.id}::uuid, ${profileId}::uuid, ${seats}::int, ${HOLD_MINUTES}::int)`;
 
-      const sequence = (await tx.booking.count({ where: { tripId: trip.id } })) + 1;
-      const reference = buildReference(trip.slug, trip.startDate, sequence);
+      // Derived from the highest existing reference, not a row count — a gap
+      // in the sequence (a deleted or superseded booking) makes a count
+      // collide with a reference that already exists.
+      const reference = await nextBookingReference(tx, trip);
       const holdExpiresAt = new Date(Date.now() + HOLD_MINUTES * 60_000);
 
       const booking = await tx.booking.create({
@@ -328,7 +328,6 @@ export async function createPaymentOrder(input: {
       // So a refund or a dispute can be reconciled from their dashboard
       // without opening ours.
       bookingAmountPaise: String(bookingAmountPaise),
-      convenienceFeePaise: String(fee.feePaise),
     },
   });
 
@@ -339,8 +338,6 @@ export async function createPaymentOrder(input: {
       method: "RAZORPAY",
       status: "CREATED",
       amountPaise,
-      convenienceFeePaise: fee.feePaise,
-      convenienceFeeRateBp: fee.rateBp || null,
       currency: "INR",
       razorpayOrderId: order.id,
     },
@@ -351,8 +348,8 @@ export async function createPaymentOrder(input: {
     orderId: order.id,
     amountPaise,
     bookingAmountPaise,
-    convenienceFeePaise: fee.feePaise,
-    convenienceFeeRateBp: fee.rateBp,
+    convenienceFeePaise: 0,
+    convenienceFeeRateBp: 0,
     currency: "INR",
     reference: created.reference,
     bookingId: created.id,

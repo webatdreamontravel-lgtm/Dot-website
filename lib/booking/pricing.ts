@@ -112,66 +112,26 @@ export function recalcForSeats(
  * zero-padded sequence within that trip.
  */
 export function buildReference(slug: string, startDate: Date, sequence: number) {
-  const letters = slug.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2) || "DT";
-  const year = String(startDate.getUTCFullYear()).slice(-2);
-  return `DOT-${letters}${year}-${String(sequence).padStart(4, "0")}`;
+  return `${referencePrefix(slug, startDate)}${String(sequence).padStart(4, "0")}`;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Convenience fee
-//
-// The payment gateway's cut, passed to the customer — but only when they
-// choose to pay online. Cash and bank transfers recorded by the team cost
-// nothing to process and carry none.
-//
-// Deliberately NOT part of computePricing(). That function describes the
-// trip: what it costs, what tax applies, what the advance is. The fee is a
-// property of the payment rail, decided later and only sometimes. Folding it
-// in would put it on trip pages and in booking totals, which is exactly where
-// it must not appear — it is money in transit to Razorpay, not income.
-// ─────────────────────────────────────────────────────────────
-
-/** Basis points, so the rate is an integer. 236 = 2.36%. */
-export type FeeRateBp = number;
-
-export type ConvenienceFee = {
-  /** What the booking is worth — unchanged by how it's paid. */
-  bookingPaise: number;
-  /** The fee itself, a whole number of rupees. */
-  feePaise: number;
-  /** What the customer is actually charged. bookingPaise + feePaise. */
-  grossPaise: number;
-  rateBp: FeeRateBp;
-};
 
 /**
- * Works out the fee on an amount about to be charged.
+ * Everything before the sequence — "DOT-WA26-".
  *
- * Applied to the amount being paid NOW, not to the trip total — someone
- * paying an advance is only costing us the gateway's cut on the advance.
- * Paying in two instalments therefore attracts the fee twice, which is
- * correct: Razorpay charges us twice.
- *
- * Rounded to whole rupees with the same helper the tax lines use, so the
- * figure on the button is exactly the figure charged. A fee of ₹47.62 shown
- * as ₹48 but charged as ₹47.62 is a reconciliation problem forever.
+ * Split out so the next sequence can be found by looking at the references
+ * that already exist, rather than by counting rows. Counting is wrong the
+ * moment a booking is deleted or a reference is skipped: four rows numbered
+ * 1, 2, 3, 5 make count() say 4, which collides with 5 and fails the unique
+ * index on `reference`.
  */
-export function computeConvenienceFee(
-  bookingPaise: number,
-  rateBp: FeeRateBp,
-): ConvenienceFee {
-  const safeRate = Number.isFinite(rateBp) && rateBp > 0 ? Math.trunc(rateBp) : 0;
-  const feePaise = safeRate === 0 ? 0 : toWholeRupees((bookingPaise * safeRate) / 10_000);
-
-  return {
-    bookingPaise,
-    feePaise,
-    grossPaise: bookingPaise + feePaise,
-    rateBp: safeRate,
-  };
+export function referencePrefix(slug: string, startDate: Date) {
+  const letters = slug.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2) || "DT";
+  const year = String(startDate.getUTCFullYear()).slice(-2);
+  return `DOT-${letters}${year}-`;
 }
 
-/** "2.36%" — for the label beside the amount. */
-export function formatFeeRate(rateBp: FeeRateBp): string {
-  return `${(rateBp / 100).toFixed(2).replace(/\.?0+$/, "")}%`;
+/** Pulls the sequence back out of a reference. 0 if it isn't one of ours. */
+export function referenceSequence(reference: string): number {
+  const n = Number(reference.slice(reference.lastIndexOf("-") + 1));
+  return Number.isFinite(n) ? n : 0;
 }

@@ -6,9 +6,7 @@ import { AlertCircle, ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus } from 
 
 import type { BookableTrip } from "@/lib/queries/booking";
 import {
-  computeConvenienceFee,
   computePricing,
-  formatFeeRate,
   MAX_SEATS_PER_BOOKING,
   toRupees,
 } from "@/lib/booking/pricing";
@@ -24,17 +22,12 @@ type Customer = { fullName: string | null; email: string; phone: string | null }
 
 const blank = (): Traveller => ({ fullName: "", phone: "", email: "" });
 
-/** The gateway's cut, passed down from the server so it can't be guessed. */
-type FeeConfig = { rateBp: number; label: string } | null;
-
 export function BookingForm({
   trip,
   customer,
-  fee,
 }: {
   trip: BookableTrip;
   customer: Customer;
-  fee: FeeConfig;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -78,19 +71,15 @@ export function BookingForm({
   const canChoose = price.advanceDuePaise > 0 && price.balancePaise > 0;
   const [payMode, setPayMode] = useState<"ADVANCE" | "FULL">("ADVANCE");
   const payFull = !canChoose || payMode === "FULL";
-  const bookingNowPaise = payFull ? price.totalPaise : price.advanceDuePaise;
-
   /**
-   * The convenience fee, on the amount being charged now.
+   * What we ask Razorpay to charge.
    *
-   * Computed with the same function the server uses and the rate it handed
-   * down, so the figure on the button is exactly what Razorpay will charge.
-   * Only applies to online payment — a trip the team collects by hand never
-   * shows one.
+   * Deliberately excludes any gateway fee. Razorpay's "Customer pays the fee"
+   * setting adds their platform fee on top at checkout and shows the customer
+   * the breakdown itself — so quoting a fee-inclusive figure here would both
+   * double-count it and disagree with what their popup displays.
    */
-  const feeRateBp = payOnline && fee ? fee.rateBp : 0;
-  const charge = computeConvenienceFee(bookingNowPaise, feeRateBp);
-  const payNowPaise = charge.grossPaise;
+  const payNowPaise = payFull ? price.totalPaise : price.advanceDuePaise;
 
   // Jump to the first problem after the errors have actually rendered — with
   // three travellers on screen the bad field is often below the fold.
@@ -477,8 +466,6 @@ export function BookingForm({
         canChoose={canChoose}
         payFull={payFull}
         setPayMode={setPayMode}
-        charge={charge}
-        feeLabel={fee?.label ?? "Convenience fee"}
       />
     </div>
   );
@@ -514,8 +501,6 @@ function PriceSummary({
   canChoose,
   payFull,
   setPayMode,
-  charge,
-  feeLabel,
 }: {
   trip: BookableTrip;
   price: ReturnType<typeof computePricing>;
@@ -523,8 +508,6 @@ function PriceSummary({
   canChoose: boolean;
   payFull: boolean;
   setPayMode: (m: "ADVANCE" | "FULL") => void;
-  charge: ReturnType<typeof computeConvenienceFee>;
-  feeLabel: string;
 }) {
   return (
     <aside className="order-1 lg:order-2 lg:sticky lg:top-28">
@@ -559,35 +542,6 @@ function PriceSummary({
             </dd>
           </div>
         </dl>
-
-        {/* The fee, disclosed before payment.
-            RBI and card-network rules require the customer be told the amount
-            before the transaction — not merely on the receipt. It sits under
-            the pay-mode choice so it re-reads correctly when they switch
-            between advance and full. */}
-        {charge.feePaise > 0 && (
-          <div className="border-t border-cream/10 px-6 py-4">
-            <div className="flex items-baseline justify-between text-[0.85rem]">
-              <span className="text-cream/70">
-                {feeLabel}{" "}
-                <span className="text-cream/40">({formatFeeRate(charge.rateBp)})</span>
-              </span>
-              <span className="tabular-nums text-cream/85">
-                {formatINR(toRupees(charge.feePaise))}
-              </span>
-            </div>
-            <div className="mt-2.5 flex items-baseline justify-between border-t border-cream/15 pt-2.5">
-              <span className="font-medium">Pay now</span>
-              <b className="font-display text-xl tabular-nums text-yellow">
-                {formatINR(toRupees(charge.grossPaise))}
-              </b>
-            </div>
-            <p className="mt-2 text-[0.72rem] leading-snug text-cream/40">
-              Charged by the payment gateway on online payments. Pay us directly
-              and there&apos;s no fee.
-            </p>
-          </div>
-        )}
 
         {canChoose && (
           <fieldset className="border-t border-cream/10 bg-cream/[0.04] px-6 py-4">

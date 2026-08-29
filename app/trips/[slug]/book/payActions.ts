@@ -8,7 +8,6 @@ import {
   type TravellerInput,
 } from "@/lib/payments/createOrder";
 import { paymentsConfigured } from "@/lib/payments/client";
-import { getConvenienceFeeConfig } from "@/lib/payments/convenienceFee";
 
 /**
  * Server action wrapper around createPaymentOrder.
@@ -54,16 +53,4 @@ export async function startPayment(input: {
   // The publishable key. Safe in the browser — it identifies the merchant and
   // can't authorise anything on its own.
   return { ...result, keyId: process.env.RAZORPAY_KEY_ID! };
-}
-
-/**
- * The fee rate, for the checkout summary.
- *
- * Read on the server and passed down rather than hardcoded in the component,
- * so the figure on screen is the one the order will actually be created with.
- * A client that guessed its own rate could show ₹48 and charge ₹73.
- */
-export async function convenienceFeeRate(): Promise<{ rateBp: number; label: string }> {
-  const cfg = await getConvenienceFeeConfig();
-  return { rateBp: cfg.enabled ? cfg.rateBp : 0, label: cfg.label };
 }

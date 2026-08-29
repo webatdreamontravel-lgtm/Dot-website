@@ -220,14 +220,14 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                   <Line label="Paid" value={formatINR(toRupees(booking.amountPaidPaise))} />
                 )}
 
-                {/* The card statement will read higher than "Paid" above,
-                    because the gateway's fee rode along with it. Someone
+                {/* Razorpay adds its own fee at checkout, so the card
+                    statement reads higher than "Paid" above. Someone
                     reconciling their bank statement against this page needs
                     that difference named, or it looks like we took more than
-                    we said. */}
+                    we said we would. */}
                 {feesCharged > 0 && (
                   <Line
-                    label="Convenience fee charged"
+                    label="Payment gateway fee"
                     value={formatINR(toRupees(feesCharged))}
                     hint={`Your statement will show ${formatINR(
                       toRupees(booking.amountPaidPaise + feesCharged),

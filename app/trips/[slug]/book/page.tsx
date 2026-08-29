@@ -11,7 +11,6 @@ import { computePricing, toRupees } from "@/lib/booking/pricing";
 import { formatINR } from "@/lib/utils";
 import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 import { BookingForm } from "./BookingForm";
-import { getConvenienceFeeConfig } from "@/lib/payments/convenienceFee";
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -28,10 +27,7 @@ export default async function BookTripPage({ params }: Params) {
   // account only at the point it's genuinely needed.
   const profile = await getSessionProfile();
 
-  const [trip, feeConfig] = await Promise.all([
-    getBookableTrip(slug),
-    getConvenienceFeeConfig(),
-  ]);
+  const trip = await getBookableTrip(slug);
   if (!trip) notFound();
 
   return (
@@ -59,7 +55,6 @@ export default async function BookTripPage({ params }: Params) {
           ) : profile ? (
             <BookingForm
               trip={trip}
-              fee={feeConfig.enabled ? { rateBp: feeConfig.rateBp, label: feeConfig.label } : null}
               customer={{
                 fullName: profile.fullName,
                 email: profile.email,
