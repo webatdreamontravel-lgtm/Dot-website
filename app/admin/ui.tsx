@@ -62,7 +62,8 @@ export const BOOKING_TONE: Record<string, { tone: string; label: string }> = {
   REQUESTED: { tone: "info", label: "Request" },
   PENDING_PAYMENT: { tone: "warn", label: "Pending payment" },
   CANCELLED: { tone: "bad", label: "Cancelled" },
-  REFUNDED: { tone: "mute", label: "Refunded" },
+  REFUNDED: { tone: "mute", label: "Refunded in full" },
+  PARTIALLY_REFUNDED: { tone: "mute", label: "Partly refunded" },
   EXPIRED: { tone: "mute", label: "Expired" },
 };
 

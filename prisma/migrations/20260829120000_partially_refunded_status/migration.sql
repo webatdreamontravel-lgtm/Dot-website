@@ -1,0 +1,11 @@
+-- A booking that was cancelled and settled with a cancellation charge kept
+-- back. "REFUNDED" claims the customer got everything; on a booking where a
+-- charge was retained that is a claim they will dispute, and the difference
+-- is exactly the kind of thing that ends up in a chargeback.
+--
+-- Added after EXPIRED rather than beside REFUNDED only because ADD VALUE
+-- appends by default; enum ORDER is not relied on anywhere in the app.
+--
+-- Not seat-occupying: like CANCELLED and REFUNDED, the seat has already gone
+-- back to the trip. See SEAT_COUNTED_STATUSES in lib/booking/seats.ts.
+ALTER TYPE "BookingStatus" ADD VALUE IF NOT EXISTS 'PARTIALLY_REFUNDED';

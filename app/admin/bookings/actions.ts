@@ -7,19 +7,15 @@ import { requireAdmin } from "@/lib/auth";
 import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { seatsCounted } from "@/lib/booking/seats";
+import { notifyPaymentRecorded, notifyStatusChange } from "@/lib/booking/notify";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
+import {
+  reminderSelect,
+  sendBalanceReminder,
+} from "@/lib/payments/balanceReminder";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
-
-/**
- * Which booking states occupy a seat.
- *
- * The single fact every seat adjustment below depends on. PENDING_PAYMENT
- * doesn't count because those seats are held by a seat_hold row instead —
- * counting them here would take the same seat twice.
- */
-const SEAT_HOLDING = new Set(["REQUESTED", "CONFIRMED"]);
-const seatsCounted = (status: string) => SEAT_HOLDING.has(status);
 
 /**
  * Moves a trip's booked-seat count.
@@ -104,7 +100,7 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
   const data = parsed.data;
 
   try {
-    const slug = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: data.bookingId },
         select: {
@@ -163,10 +159,25 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         { amountPaidPaise: booking.amountPaidPaise, status: booking.status },
         { amountPaidPaise: paid, status: nextStatus, method: data.method });
 
-      return booking.trip.slug;
+      return {
+        slug: booking.trip.slug,
+        // Whether this payment is what confirmed the booking decides which
+        // email the customer gets — a confirmation, or a receipt.
+        justConfirmed: nextStatus === "CONFIRMED" && booking.status !== "CONFIRMED",
+      };
     });
 
-    revalidateBooking(slug);
+    // Outside the transaction on purpose: a mail provider being down must
+    // not roll back money the team has already taken in cash.
+    await notifyPaymentRecorded({
+      bookingId: data.bookingId,
+      amountPaise: data.amountPaise,
+      method: data.method,
+      externalReference: data.externalReference || null,
+      justConfirmed: result.justConfirmed,
+    });
+
+    revalidateBooking(result.slug);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't record that payment.");
@@ -175,7 +186,10 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
 
 const statusSchema = z.object({
   bookingId: z.string().uuid(),
-  status: z.enum(["PENDING_PAYMENT", "REQUESTED", "CONFIRMED", "CANCELLED", "REFUNDED", "EXPIRED"]),
+  status: z.enum([
+    "PENDING_PAYMENT", "REQUESTED", "CONFIRMED",
+    "CANCELLED", "REFUNDED", "PARTIALLY_REFUNDED", "EXPIRED",
+  ]),
   reason: z.string().trim().max(300).optional().or(z.literal("")),
 });
 
@@ -196,13 +210,15 @@ export async function updateBookingStatus(
   const { bookingId, status, reason } = parsed.data;
 
   try {
-    const slug = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: bookingId },
         select: { id: true, status: true, seats: true, trip: { select: { id: true, slug: true } } },
       });
       if (!booking) throw new Error("Booking not found.");
-      if (booking.status === status) return booking.trip.slug;
+      // No change, no email. Re-saving the same status must not chase the
+      // customer with a second copy of news they already had.
+      if (booking.status === status) return { slug: booking.trip.slug, changed: false };
 
       const was = seatsCounted(booking.status);
       const now = seatsCounted(status);
@@ -227,10 +243,14 @@ export async function updateBookingStatus(
       await audit(tx, admin.id, "booking.status_changed", booking.id,
         { status: booking.status }, { status, reason: reason || null });
 
-      return booking.trip.slug;
+      return { slug: booking.trip.slug, changed: true };
     });
 
-    revalidateBooking(slug);
+    if (result.changed) {
+      await notifyStatusChange({ bookingId, status, reason: reason || null });
+    }
+
+    revalidateBooking(result.slug);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't update the booking.");
@@ -483,4 +503,64 @@ export async function refundBooking(
   } catch (e) {
     return fail(e, "Couldn't start that refund.");
   }
+}
+
+/**
+ * Sends a balance reminder now, from the booking screen.
+ *
+ * Exists because the automated schedule can't know that someone just rang to
+ * say they'd pay, or that a trip lead wants a nudge sent before a WhatsApp
+ * call. It sends the SAME email the cron would — one template, so a manual
+ * nudge can never drift from the automated one.
+ *
+ * Deduped on the calendar date in its own namespace, which does two things:
+ * a double-clicked button sends once, but a human can still nudge someone
+ * today even if this morning's automated reminder already went out.
+ */
+export async function sendBalanceReminderNow(
+  reference: string,
+): Promise<ActionResult & { info?: string }> {
+  const admin = await requireAdmin();
+
+  const booking = await prisma.booking.findUnique({
+    where: { reference },
+    select: reminderSelect,
+  });
+  if (!booking) return { ok: false, error: "That booking no longer exists." };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const result = await sendBalanceReminder(booking, {
+    dedupeKey: `balance_reminder:manual:${booking.id}:${today}`,
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+
+  // A second click on the same day. The button already promises this won't
+  // send twice, so it is the expected outcome and not an error — but it must
+  // not report a send that didn't happen either.
+  if (!result.sent && result.reason === "already-sent") {
+    return { ok: true, info: "Already sent today — nothing sent again." };
+  }
+
+  if (!result.sent) {
+    const why: Record<string, string> = {
+      "no-balance": "Nothing to chase — this booking is fully paid.",
+      "no-email": "No email address on this booking.",
+      "not-active": "This booking isn't active, so there's no balance to chase.",
+    };
+    return { ok: false, error: why[result.reason] ?? "Nothing was sent." };
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorProfileId: admin.id,
+      action: "booking.reminder_sent",
+      entity: "booking",
+      entityId: booking.id,
+      after: { to: result.to },
+    },
+  });
+
+  revalidatePath(`/admin/bookings/${reference}`);
+  return { ok: true, info: `Reminder sent to ${result.to}` };
 }

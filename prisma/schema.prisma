@@ -60,7 +60,17 @@ enum BookingStatus {
   /// At least the advance is paid. Seats ARE counted.
   CONFIRMED
   CANCELLED
+  /// Everything paid has come back. Nothing retained.
   REFUNDED
+  /// Cancelled and settled, with a cancellation charge kept back — so the
+  /// customer got some of their money, not all of it. Distinct from REFUNDED
+  /// because "refunded" on a booking where ₹200 was retained is a claim the
+  /// customer will dispute, and distinct from CANCELLED because that says
+  /// nothing about whether the money was ever dealt with.
+  ///
+  /// The charge itself is not stored: it is amountPaidPaise - refundedPaise,
+  /// so it can never disagree with the refund rows it is derived from.
+  PARTIALLY_REFUNDED
   /// Hold lapsed before payment. Seats released.
   EXPIRED
 }

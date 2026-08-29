@@ -63,7 +63,7 @@ export default async function AdminBookingsPage({ searchParams }: { searchParams
                   <table className="w-full border-collapse">
                     <thead>
                       <tr>
-                        {["Reference", "Customer", "Trip", "Status", "Seats", "Total", "Paid", "Balance", "Payment", "Source", "Booked"].map((h) => (
+                        {["Reference", "Customer", "Trip", "Status", "Seats", "Total", "Held", "Balance", "Payment", "Source", "Booked"].map((h) => (
                           <th key={h} className="whitespace-nowrap border-b border-[#e3e7ee] bg-[#fbfcfe] px-4 py-2.5 text-left text-[0.72rem] font-semibold uppercase tracking-[0.09em] text-[#8b96ad]">
                             {h}
                           </th>
@@ -104,11 +104,48 @@ export default async function AdminBookingsPage({ searchParams }: { searchParams
                             <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums">
                               {formatINR(rupees(b.totalPaise))}
                             </td>
-                            <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums text-[#0f8a5f]">
-                              {formatINR(rupees(b.amountPaidPaise))}
+                            {/* Net, not gross: what this booking is actually
+                                holding. The refund is spelled out underneath
+                                so the arithmetic is visible rather than
+                                mysterious. */}
+                            <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 tabular-nums">
+                              <span className="font-display text-[0.95rem] font-semibold text-[#0f8a5f]">
+                                {formatINR(rupees(b.netHeldPaise))}
+                              </span>
+                              {b.refundedPaise > 0 && (
+                                <span className="mt-0.5 block text-[0.72rem] font-normal text-[#8b96ad]">
+                                  {formatINR(rupees(b.amountPaidPaise))} − {formatINR(rupees(b.refundedPaise))}
+                                </span>
+                              )}
                             </td>
-                            <td className={`whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums ${b.balancePaise > 0 ? "text-[#b26a00]" : "text-[#8b96ad]"}`}>
-                              {b.balancePaise > 0 ? formatINR(rupees(b.balancePaise)) : "—"}
+                            {/* One column, both directions. An overpaid
+                                booking used to show "—" here, which is how
+                                ₹100 owed to a customer stays invisible. */}
+                            <td
+                              className={`whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 tabular-nums ${
+                                b.overpaidPaise > 0
+                                  ? "text-[#b26a00]"
+                                  : b.balancePaise > 0
+                                    ? "text-[#b26a00]"
+                                    : "text-[#8b96ad]"
+                              }`}
+                            >
+                              {b.overpaidPaise > 0 ? (
+                                <>
+                                  <span className="font-display text-[0.95rem] font-semibold">
+                                    {formatINR(rupees(b.overpaidPaise))}
+                                  </span>
+                                  <span className="mt-0.5 block text-[0.72rem] font-normal">
+                                    to refund
+                                  </span>
+                                </>
+                              ) : b.balancePaise > 0 ? (
+                                <span className="font-display text-[0.95rem] font-semibold">
+                                  {formatINR(rupees(b.balancePaise))}
+                                </span>
+                              ) : (
+                                "—"
+                              )}
                             </td>
                             <td className="border-b border-[#eef1f6] px-4 py-3"><Chip tone={pay.tone}>{pay.label}</Chip></td>
                             <td className="border-b border-[#eef1f6] px-4 py-3"><Chip tone="mute">{b.source}</Chip></td>

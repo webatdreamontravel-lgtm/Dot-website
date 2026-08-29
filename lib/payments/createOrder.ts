@@ -3,7 +3,9 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
 import { nextBookingReference } from "@/lib/booking/reference";
+import { balanceDueDate } from "@/lib/booking/instalments";
 import { razorpay } from "@/lib/payments/client";
+import { getBalanceReminderConfig } from "@/lib/config/reminders";
 
 /** Minutes a seat is held while the customer is inside Razorpay's checkout. */
 export const HOLD_MINUTES = 15;
@@ -198,6 +200,14 @@ export async function createPaymentOrder(input: {
   // is never a moment where both are held — or neither.
   const supersede = existing && !reusable ? existing : null;
 
+  // Read before the transaction: it is a plain settings lookup, and doing it
+  // inside would hold the trip row lock for a query that has nothing to do
+  // with seats.
+  const { balanceDueDaysBefore: dueDaysBefore } =
+    kind === "ADVANCE"
+      ? await getBalanceReminderConfig()
+      : { balanceDueDaysBefore: 0 };
+
   // ── 1. Hold the seats and create the booking ─────────────────────────
   let created: { id: string; reference: string; holdExpiresAt: Date };
   try {
@@ -291,9 +301,13 @@ export async function createPaymentOrder(input: {
               sequence: 2,
               label: "Balance",
               amountPaise: price.balancePaise,
-              // Balance falls due a fortnight before departure. Snapshot, so
-              // moving the trip later doesn't silently re-bill this booking.
-              dueDate: new Date(trip.startDate.getTime() - 15 * 86_400_000),
+              /**
+               * Snapshot, so moving the trip later doesn't silently re-bill
+               * this booking — and clamped, so a booking made inside the
+               * usual window doesn't arrive already overdue. See
+               * balanceDueDate().
+               */
+              dueDate: balanceDueDate(trip.startDate, dueDaysBefore),
             },
           ],
         });

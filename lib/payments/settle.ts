@@ -1,12 +1,13 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { sendEmail } from "@/lib/email/send";
+import { seatsCounted } from "@/lib/booking/seats";
+import { sendEmail } from "@/emails";
 import {
   bookingConfirmedEmail,
   seatUnavailableAdminEmail,
   seatUnavailableEmail,
-} from "@/lib/email/templates";
+} from "@/emails";
 
 export type SettleInput = {
   /** Razorpay order id — how we find our own Payment row. */
@@ -114,43 +115,56 @@ export async function settlePayment(input: SettleInput): Promise<SettleResult> {
     // Held since the order was created; this is where they become real.
     let seatLost = false;
 
-    if (booking.pendingHoldId) {
-      try {
-        await tx.$executeRaw`SELECT confirm_seat_hold(${booking.pendingHoldId}::uuid, ${booking.id}::uuid)`;
-      } catch (e) {
-        if (!isHoldGone(e)) throw e;
-        seatLost = true;
-      }
-    }
-
     /**
-     * The late-authorisation case.
+     * Does this booking already own its seats?
      *
-     * Razorpay calls this "Late Auth": the customer starts paying, our hold
-     * lapses, and the bank approves the charge minutes later. By then the
-     * cron may have released the hold and cleared pendingHoldId, so there is
-     * no hold left to confirm — and without this the booking would be marked
-     * CONFIRMED, the money counted, and the seat never taken. The trip would
-     * believe it still had a seat it had actually sold.
-     *
-     * They have paid, so they get a seat if one exists. The WHERE clause is
-     * the guard: it can only ever take a seat the trip genuinely has, so two
-     * late payments racing for one remaining seat cannot both win.
+     * A balance payment lands on a booking that was confirmed weeks ago and
+     * has been counted in trips.seats_booked ever since. Everything below is
+     * about acquiring a seat for the FIRST time, and none of it should run
+     * for a second payment — claiming again would count the same traveller
+     * twice and quietly shrink the trip by a seat on every balance settled.
      */
-    if (!booking.pendingHoldId || seatLost) {
-      const claimed = await tx.$executeRaw`
-        UPDATE trips
-           SET seats_booked = seats_booked + ${booking.seats},
-               updated_at   = now()
-         WHERE id = ${booking.tripId}::uuid
-           AND seats_booked + ${booking.seats} <= total_seats`;
+    const alreadySeated = seatsCounted(booking.status);
 
-      // Nothing updated means the trip really is full. We are holding their
-      // money with no seat to give, and there is no correct automatic
-      // answer — refunding silently would be worse than telling someone. The
-      // booking is parked as REQUESTED with a note, which is a state the team
-      // already knows how to work.
-      seatLost = claimed === 0;
+    if (!alreadySeated) {
+      if (booking.pendingHoldId) {
+        try {
+          await tx.$executeRaw`SELECT confirm_seat_hold(${booking.pendingHoldId}::uuid, ${booking.id}::uuid)`;
+        } catch (e) {
+          if (!isHoldGone(e)) throw e;
+          seatLost = true;
+        }
+      }
+
+      /**
+       * The late-authorisation case.
+       *
+       * Razorpay calls this "Late Auth": the customer starts paying, our hold
+       * lapses, and the bank approves the charge minutes later. By then the
+       * cron may have released the hold and cleared pendingHoldId, so there is
+       * no hold left to confirm — and without this the booking would be marked
+       * CONFIRMED, the money counted, and the seat never taken. The trip would
+       * believe it still had a seat it had actually sold.
+       *
+       * They have paid, so they get a seat if one exists. The WHERE clause is
+       * the guard: it can only ever take a seat the trip genuinely has, so two
+       * late payments racing for one remaining seat cannot both win.
+       */
+      if (!booking.pendingHoldId || seatLost) {
+        const claimed = await tx.$executeRaw`
+          UPDATE trips
+             SET seats_booked = seats_booked + ${booking.seats},
+                 updated_at   = now()
+           WHERE id = ${booking.tripId}::uuid
+             AND seats_booked + ${booking.seats} <= total_seats`;
+
+        // Nothing updated means the trip really is full. We are holding their
+        // money with no seat to give, and there is no correct automatic
+        // answer — refunding silently would be worse than telling someone. The
+        // booking is parked as REQUESTED with a note, which is a state the team
+        // already knows how to work.
+        seatLost = claimed === 0;
+      }
     }
 
     /**

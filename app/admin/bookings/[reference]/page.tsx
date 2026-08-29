@@ -6,7 +6,14 @@ import { requireAdmin } from "@/lib/auth";
 import { getAdminBooking, rupees } from "@/lib/queries/admin";
 import { formatDateRange, formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, PAYMENT_TONE, Panel } from "../../ui";
-import { DetailsPanel, PaymentPanel, RefundPanel, StatusPanel } from "./BookingManager";
+import { prisma } from "@/lib/prisma";
+import {
+  DetailsPanel,
+  PaymentPanel,
+  RefundPanel,
+  ReminderPanel,
+  StatusPanel,
+} from "./BookingManager";
 
 export const metadata = { title: "Booking" };
 
@@ -29,11 +36,38 @@ export default async function AdminBookingPage({
   if (!booking) notFound();
 
   const status = BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
-  const balancePaise = booking.totalPaise - booking.amountPaidPaise;
+  /**
+   * The money, as three related figures rather than two unrelated ones.
+   *
+   *   netHeld    what we are actually holding: paid minus refunded. This is
+   *              the number that reconciles against a bank balance, and the
+   *              one every other figure should be measured from.
+   *   balance    what the customer still owes.
+   *   overpaid   what we owe them. A booking repriced after a traveller drops
+   *              out ends up paid past its own total, which is not a bug and
+   *              was previously invisible — "Balance ₹0" and a "Paid in full"
+   *              badge on a booking holding ₹100 that isn't ours.
+   *
+   * Exactly one of balance/overpaid can be non-zero.
+   */
+  const netHeldPaise = booking.amountPaidPaise - booking.refundedPaise;
+  const balancePaise = Math.max(booking.totalPaise - netHeldPaise, 0);
+  const overpaidPaise = Math.max(netHeldPaise - booking.totalPaise, 0);
   // What customers paid ON TOP, per Razorpay's "customer pays the fee"
   // setting. Never added to the balance — this went straight to Razorpay and
   // was never DOT's. Zero for cash and for anything paid before the setting
   // was switched on.
+  // When a reminder last went out — automated or manual. Shown so nobody
+  // nudges someone who was emailed an hour ago.
+  const lastReminderAt =
+    (
+      await prisma.emailLog.findFirst({
+        where: { bookingId: booking.id, template: "balance_reminder", status: "SENT" },
+        orderBy: { createdAt: "desc" },
+        select: { sentAt: true, createdAt: true },
+      })
+    )?.sentAt ?? null;
+
   const feesCollected = booking.payments
     .filter((p) => p.status === "CAPTURED")
     .reduce((n, p) => n + p.convenienceFeePaise, 0);
@@ -79,12 +113,26 @@ export default async function AdminBookingPage({
 
       <div className="mb-5 grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Seats" value={String(booking.seats)} />
-        <Stat label="Total" value={formatINR(rupees(booking.totalPaise))} />
-        <Stat label="Paid" value={formatINR(rupees(booking.amountPaidPaise))} tone="ok" />
+        <Stat label="Trip total" value={formatINR(rupees(booking.totalPaise))} />
+        {/* Net, not gross. "Paid ₹6,300" on a booking where ₹2,000 has gone
+            back overstates what we hold by exactly the refund. */}
         <Stat
-          label="Balance"
-          value={formatINR(rupees(Math.max(balancePaise, 0)))}
-          tone={balancePaise > 0 ? "warn" : undefined}
+          label="Held"
+          value={formatINR(rupees(netHeldPaise))}
+          sub={
+            booking.refundedPaise > 0
+              ? `${formatINR(rupees(booking.amountPaidPaise))} paid · ${formatINR(
+                  rupees(booking.refundedPaise),
+                )} refunded`
+              : undefined
+          }
+          tone="ok"
+        />
+        <Stat
+          label={overpaidPaise > 0 ? "To refund" : "Balance"}
+          value={formatINR(rupees(overpaidPaise > 0 ? overpaidPaise : balancePaise))}
+          sub={overpaidPaise > 0 ? "held above the trip total" : undefined}
+          tone={overpaidPaise > 0 || balancePaise > 0 ? "warn" : undefined}
         />
       </div>
 
@@ -199,6 +247,7 @@ export default async function AdminBookingPage({
               already on its way out. */}
           <RefundPanel
             reference={booking.reference}
+            owedPaise={overpaidPaise}
             refundedPaise={booking.refunds
               .filter((r) => r.status === "PROCESSED")
               .reduce((n, r) => n + r.amountPaise, 0)}
@@ -220,6 +269,13 @@ export default async function AdminBookingPage({
             bookingId={booking.id}
             status={booking.status}
             seatsCounted={seatsCounted}
+            customerEmail={booking.profile.email ?? booking.travellers[0]?.email ?? null}
+          />
+
+          <ReminderPanel
+            reference={booking.reference}
+            balancePaise={Math.max(balancePaise, 0)}
+            lastSentAt={lastReminderAt}
           />
 
           {booking.cancellationReason && (
@@ -262,7 +318,18 @@ function Line({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "ok" | "warn" }) {
+function Stat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  /** The working underneath the figure — "₹6,300 paid · ₹2,000 refunded". */
+  sub?: string;
+  tone?: "ok" | "warn";
+}) {
   const colour = tone === "ok" ? "text-[#0f8a5f]" : tone === "warn" ? "text-[#b26a00]" : "";
   return (
     <div className="rounded-[14px] border border-[#e3e7ee] bg-white p-[15px_18px] shadow-sm">
@@ -272,6 +339,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "ok
       <div className={`mt-1.5 font-display text-[1.5rem] font-semibold tabular-nums ${colour}`}>
         {value}
       </div>
+      {sub && <div className="mt-1 text-[0.75rem] leading-snug text-[#8b96ad]">{sub}</div>}
     </div>
   );
 }

@@ -17,7 +17,11 @@
     "db:test-capacity": "node --env-file=.env.local scripts/test-capacity.mjs",
     "db:load-test": "node --env-file=.env.local scripts/load-test.mjs",
     "db:seed": "tsx --env-file=.env.local prisma/seed.ts",
-    "make-admin": "tsx --env-file=.env.local scripts/make-admin.ts"
+    "make-admin": "tsx --env-file=.env.local scripts/make-admin.ts",
+    "test:seed": "tsx --env-file=.env.local scripts/seed-test-trips.ts",
+    "test:reset": "tsx --env-file=.env.local scripts/reset-test-trips.ts",
+    "test:state": "node --env-file=.env.local scripts/payment-state.mjs",
+    "test:webhook": "node --env-file=.env.local scripts/replay-webhook.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

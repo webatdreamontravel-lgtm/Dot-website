@@ -280,10 +280,27 @@ export type BookingTotals = {
   collectedPaise: number;
   /** Still owed — on live bookings only. Nobody owes money on a cancellation. */
   outstandingPaise: number;
-  /** Taken from customers whose booking is now cancelled, and not yet returned. */
+  /**
+   * Money owed BACK to customers, from two sources:
+   *   - whole bookings that are cancelled or expired but still hold money
+   *   - live bookings that have been paid past what they now cost, which is
+   *     what happens when a traveller drops out and the booking is repriced
+   *
+   * REFUNDED and PARTIALLY_REFUNDED contribute nothing: both mean somebody
+   * has already decided how that booking settles, so whatever is still held
+   * is held deliberately.
+   */
   toRefundPaise: number;
   /** Already returned. */
   refundedPaise: number;
+  /**
+   * What the business actually holds: collected minus refunded.
+   *
+   * The figure to reconcile against a bank balance. "Collected" alone is a
+   * gross number that keeps counting money already sent back, so a trip that
+   * refunded half its bookings still reports the full amount taken.
+   */
+  netHeldPaise: number;
 };
 
 /**
@@ -354,7 +371,7 @@ function bookingWhere(filters: BookingFilters, tripId?: string): Prisma.BookingW
 const DEAD_STATUSES = ["CANCELLED", "EXPIRED"] as const;
 
 async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTotals> {
-  const [agg, live, deadSeats, cancelledTravellers, dead] = await Promise.all([
+  const [agg, live, deadSeats, cancelledTravellers, dead, liveRows] = await Promise.all([
     prisma.booking.aggregate({
       where,
       _count: { _all: true },
@@ -380,26 +397,54 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
         booking: { AND: [where, { status: { notIn: [...DEAD_STATUSES] } }] },
       },
     }),
-    // Money sitting on bookings that are no longer going anywhere.
+    // Money sitting on bookings that are no longer going anywhere. REFUNDED
+    // and PARTIALLY_REFUNDED are excluded: both are settled outcomes, so
+    // anything still held on them is held on purpose.
     prisma.booking.aggregate({
-      where: { AND: [where, { status: { in: [...DEAD_STATUSES, "REFUNDED"] } }] },
+      where: { AND: [where, { status: { in: [...DEAD_STATUSES] } }] },
       _sum: { amountPaidPaise: true, refundedPaise: true },
+    }),
+    /**
+     * Live bookings paid past what they now cost.
+     *
+     * Cancel one traveller off a party of three and the booking reprices to
+     * two while the money already paid stays where it is — so the booking is
+     * legitimately overpaid and we owe the difference. Summed per row in SQL
+     * because it is a per-booking maximum: netting it across the trip would
+     * let one customer's underpayment cancel out another's refund.
+     */
+    prisma.booking.findMany({
+      where: { AND: [where, { status: { in: ["REQUESTED", "CONFIRMED"] } }] },
+      select: { totalPaise: true, amountPaidPaise: true, refundedPaise: true },
     }),
   ]);
 
   const totalPaise = agg._sum.totalPaise ?? 0;
   const collectedPaise = agg._sum.amountPaidPaise ?? 0;
 
-  // Owed is a live-booking idea. Summing every booking counted the balance of
-  // cancelled ones as debt, when in fact the money flows the other way.
-  const liveTotals = await prisma.booking.aggregate({
-    where: { AND: [where, { status: { notIn: [...DEAD_STATUSES, "REFUNDED"] } }] },
-    _sum: { totalPaise: true, amountPaidPaise: true },
-  });
-
   const refundedPaise = agg._sum.refundedPaise ?? 0;
   const deadCollected = dead._sum.amountPaidPaise ?? 0;
   const deadRefunded = dead._sum.refundedPaise ?? 0;
+
+  /**
+   * Both directions, computed PER BOOKING and never netted across the trip.
+   *
+   * Summing first and clamping after lets one customer's overpayment cancel
+   * another's debt: a trip where A still owes ₹3,250 and B is ₹100 overpaid
+   * would report ₹3,150 outstanding and nothing to refund, when in truth
+   * ₹3,250 is owed to us and ₹100 is owed to B. Two separate people, two
+   * separate obligations, and neither settles the other.
+   *
+   * Also nets each booking's own refunds first — money already returned is
+   * not money the customer has paid toward their trip.
+   */
+  let overpaidPaise = 0;
+  let outstandingPaise = 0;
+  for (const b of liveRows) {
+    const net = b.amountPaidPaise - b.refundedPaise;
+    if (net > b.totalPaise) overpaidPaise += net - b.totalPaise;
+    else outstandingPaise += b.totalPaise - net;
+  }
 
   return {
     count: agg._count._all,
@@ -407,24 +452,43 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
     cancelledSeats: (deadSeats._sum.seats ?? 0) + cancelledTravellers,
     totalPaise,
     collectedPaise,
-    outstandingPaise: Math.max(
-      (liveTotals._sum.totalPaise ?? 0) - (liveTotals._sum.amountPaidPaise ?? 0),
-      0,
-    ),
+    outstandingPaise,
     // Never negative: over-refunding is a data error, not a debt the
     // customer owes back.
-    toRefundPaise: Math.max(deadCollected - deadRefunded, 0),
+    toRefundPaise: Math.max(deadCollected - deadRefunded, 0) + overpaidPaise,
+    netHeldPaise: collectedPaise - refundedPaise,
     refundedPaise,
   };
 }
 
 /** Payment state is derived rather than stored — a stored copy drifts the
  *  moment a refund or an offline payment lands. */
-function withPaymentState<T extends { totalPaise: number; amountPaidPaise: number }>(b: T) {
-  const balance = b.totalPaise - b.amountPaidPaise;
+/**
+ * The money position on one booking row, derived once for every table.
+ *
+ * Everything is measured from NET — paid minus refunded — rather than from
+ * the gross. A booking that took ₹6,300 and returned ₹2,000 is holding
+ * ₹4,300, and calling that "paid ₹6,300" overstates it by exactly the refund
+ * in every column it appears in.
+ *
+ * balance and overpaid are opposite signs of the same subtraction, so only
+ * one can ever be non-zero.
+ */
+function withPaymentState<
+  T extends { totalPaise: number; amountPaidPaise: number; refundedPaise: number },
+>(b: T) {
+  const netHeld = b.amountPaidPaise - b.refundedPaise;
+  const balance = Math.max(b.totalPaise - netHeld, 0);
+  const overpaid = Math.max(netHeld - b.totalPaise, 0);
   return {
     ...b,
+    netHeldPaise: netHeld,
     balancePaise: balance,
+    overpaidPaise: overpaid,
+    // Overpayment gets no badge of its own: the refund is already spelled
+    // out in the Held column, and a second label saying the same thing adds
+    // noise without adding a fact. The figure that needs acting on lives in
+    // the Balance column and on the booking itself.
     paymentState:
       b.amountPaidPaise === 0 ? "UNPAID" : balance <= 0 ? "PAID" : "PARTIAL",
   };
@@ -444,7 +508,7 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
     take: perPage,
     select: {
       id: true, reference: true, status: true, source: true, seats: true,
-      totalPaise: true, amountPaidPaise: true, createdAt: true,
+      totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       trip: { select: { title: true, slug: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
       // Lead traveller doubles as the fallback name: profiles created by a
@@ -460,6 +524,9 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
     page,
     perPage,
     pageCount,
+    // Scoped to the filter on purpose here: this screen is a search across
+    // every booking, so "the money on what you searched for" is the useful
+    // answer. The per-trip screen is the opposite case — see below.
     totals,
   };
 }
@@ -471,8 +538,23 @@ export async function getBookingsForTrip(
   perPage = PER_PAGE,
 ) {
   const where = bookingWhere(filters, tripId);
-  const totals = await bookingTotals(where);
-  const { page, pageCount, skip } = resolvePage(filters.page, totals.count, perPage);
+
+  /**
+   * The figures describe the TRIP, not the current filter.
+   *
+   * They used to be aggregated over the filtered `where`, so choosing
+   * "Confirmed" in the dropdown rewrote every card — collected, outstanding,
+   * refunded, all of it. A panel of numbers that moves when you filter a
+   * table below it is a panel nobody can trust: you can't tell whether
+   * ₹11,500 is what the trip has taken or what these four rows have taken.
+   *
+   * Only the row count is filter-aware, because pagination needs it.
+   */
+  const [totals, matchCount] = await Promise.all([
+    bookingTotals(bookingWhere({}, tripId)),
+    prisma.booking.count({ where }),
+  ]);
+  const { page, pageCount, skip } = resolvePage(filters.page, matchCount, perPage);
 
   const rows = await prisma.booking.findMany({
     where,
@@ -481,7 +563,7 @@ export async function getBookingsForTrip(
     take: perPage,
     select: {
       id: true, reference: true, status: true, source: true, seats: true,
-      totalPaise: true, amountPaidPaise: true, createdAt: true,
+      totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       profile: { select: { fullName: true, email: true, phone: true } },
       travellers: { select: { fullName: true, phone: true, email: true, cancelledAt: true } },
     },
@@ -489,10 +571,12 @@ export async function getBookingsForTrip(
 
   return {
     rows: rows.map(withPaymentState),
-    total: totals.count,
+    /** How many rows the filter matched — what pagination counts. */
+    total: matchCount,
     page,
     perPage,
     pageCount,
+    /** The whole trip, regardless of what the table is filtered to. */
     totals,
   };
 }
@@ -853,7 +937,7 @@ export async function getCustomerBookings(
     take: perPage,
     select: {
       id: true, reference: true, status: true, seats: true,
-      totalPaise: true, amountPaidPaise: true, createdAt: true,
+      totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       trip: { select: { title: true, batchName: true, startDate: true, slug: true } },
     },
   });

@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { razorpay } from "@/lib/payments/client";
+import { notifyRefundOutcome } from "@/lib/booking/notify";
 
 export type RefundResult =
   | { ok: true; refundId: string; amountPaise: number }
@@ -19,6 +20,10 @@ export type RefundResult =
  * refunds.refunded_paise on the booking is only ever written from the
  * PROCESSED transition, so the figure on screen means "left our account",
  * not "we asked".
+ *
+ * Neither half touches booking.status. Money moving and a booking ending are
+ * separate decisions, and only the admin path knows how to move seats to
+ * match — see the note in applyRefundEvent.
  */
 export async function requestRefund(input: {
   bookingId: string;
@@ -127,6 +132,16 @@ export async function applyRefundEvent(input: {
   amountPaise: number;
   processed: boolean;
 }): Promise<void> {
+  /**
+   * What the transaction decided, so the emails can be sent after it commits.
+   *
+   * Nothing is sent from inside: a mail provider hanging would hold the
+   * booking row lock for the length of an HTTP timeout, and a rollback after
+   * a send would leave someone told about a refund the database no longer
+   * believes in.
+   */
+  let outcome: { bookingId: string; refundedTotalPaise: number } | null = null;
+
   await prisma.$transaction(async (tx) => {
     // Match the row we created; fall back to adopting a refund raised
     // directly in the Razorpay dashboard, which has no local row yet.
@@ -180,7 +195,13 @@ export async function applyRefundEvent(input: {
     });
     if (claimed.count === 0) return;
 
-    if (!input.processed) return;
+    if (!input.processed) {
+      // A failure nobody would otherwise see. The money is still with us and
+      // the customer was never told it had gone, so this is the team's
+      // problem to pick up — see notifyRefundOutcome.
+      outcome = { bookingId: refund.bookingId, refundedTotalPaise: -1 };
+      return;
+    }
 
     // Recompute rather than increment: the sum of PROCESSED rows is the
     // definition of what was refunded, so it can't drift from its own parts.
@@ -190,20 +211,25 @@ export async function applyRefundEvent(input: {
     });
     const total = agg._sum.amountPaise ?? 0;
 
-    const booking = await tx.booking.findUniqueOrThrow({
-      where: { id: refund.bookingId },
-      select: { amountPaidPaise: true, status: true },
-    });
-
+    /**
+     * Only the money. The booking's status is left exactly as it was.
+     *
+     * This used to flip a fully-refunded booking to REFUNDED, which sounds
+     * right and isn't. Refunding and cancelling are different acts: one
+     * returns money, the other returns a SEAT. REFUNDED is not a
+     * seat-occupying status, so setting it here would tell the booking it no
+     * longer holds a seat while trips.seats_booked still counted one — a
+     * trip that "sells out" with an empty chair in it, discovered on the
+     * morning of departure.
+     *
+     * The admin panel already changes status properly: updateBookingStatus()
+     * moves seats to match and refuses if the trip has since filled. So a
+     * webhook has no business doing it as a side effect, and a person
+     * deciding a booking is over is the correct author of that decision.
+     */
     await tx.booking.update({
       where: { id: refund.bookingId },
-      data: {
-        refundedPaise: total,
-        // Fully refunded means the booking is over, however it got here.
-        status: total >= booking.amountPaidPaise && booking.status === "CANCELLED"
-          ? "REFUNDED"
-          : booking.status,
-      },
+      data: { refundedPaise: total },
     });
 
     await tx.auditLog.create({
@@ -214,5 +240,19 @@ export async function applyRefundEvent(input: {
         after: { razorpayRefundId: input.razorpayRefundId, amountPaise: input.amountPaise, refundedTotalPaise: total },
       },
     });
+
+    outcome = { bookingId: refund.bookingId, refundedTotalPaise: total };
   });
+
+  // Only when the claim actually succeeded — a replayed webhook returns
+  // early and must not send a second copy of either mail.
+  if (outcome) {
+    await notifyRefundOutcome({
+      bookingId: (outcome as { bookingId: string }).bookingId,
+      amountPaise: input.amountPaise,
+      refundedTotalPaise: (outcome as { refundedTotalPaise: number }).refundedTotalPaise,
+      razorpayRefundId: input.razorpayRefundId,
+      processed: input.processed,
+    });
+  }
 }
