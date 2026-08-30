@@ -1,17 +1,21 @@
 import { siteConfig } from "@/lib/data/siteConfig";
 
 /**
- * Email templates.
+ * The shell every email is built in.
  *
  * Table layout and inline styles throughout: Outlook and Gmail strip
  * <style> blocks and ignore flexbox, so anything cleverer than this renders
  * as a stack of unstyled text in the clients most people actually use.
+ *
+ * Templates live one per file beside this. They export a plain
+ * { subject, html, text } object and know nothing about sending — which is
+ * what makes them readable without a mail server, and testable without one.
  */
 
-const NAVY = "#0f1e3d";
-const CREAM = "#fef9e7";
-const YELLOW = "#f4c542";
-const MUTED = "#5a6785";
+export const NAVY = "#0f1e3d";
+export const CREAM = "#fef9e7";
+export const YELLOW = "#f4c542";
+export const MUTED = "#5a6785";
 
 export function layout({ heading, body, preheader }: {
   heading: string;
@@ -50,63 +54,18 @@ export function button(href: string, label: string) {
     </td></tr></table>`;
 }
 
-/**
- * Confirms someone owns the address they signed up with.
- *
- * Leads with a code rather than a link: the person is still sitting on the
- * signup screen waiting, and a code lets them finish there instead of
- * bouncing out to their inbox and back. The link is kept underneath for
- * anyone who'd rather just tap it, or who opens the mail on another device.
- */
-export function verificationEmail({
-  name,
-  code,
-  confirmUrl,
-}: {
-  name: string | null;
-  code: string;
-  confirmUrl: string;
-}) {
-  const greeting = name ? `Hi ${escapeHtml(name.split(" ")[0])},` : "Hi,";
-  const spaced = code.replace(/\s+/g, "");
-
-  return {
-    // The code is in the subject so it's readable from the notification
-    // banner without opening anything.
-    subject: `${spaced} is your Dream On Travel code`,
-    html: layout({
-      heading: "Your verification code",
-      preheader: `${spaced} — enter this to finish setting up your account.`,
-      body: `
-        <p style="margin:0 0 14px;">${greeting}</p>
-        <p style="margin:0 0 4px;">Welcome to ${siteConfig.name}. Enter this code on the signup screen to finish:</p>
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0;">
-          <tr><td style="border-radius:12px;background:${CREAM};border:1px solid rgba(15,30,61,0.1);padding:16px 28px;">
-            <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:30px;font-weight:700;letter-spacing:6px;color:${NAVY};">${spaced}</span>
-          </td></tr>
-        </table>
-        <p style="margin:0 0 16px;font-size:13px;">The code expires in an hour and can only be used once.</p>
-        <p style="margin:0 0 6px;font-size:13px;">Not on that screen any more? Tap this instead:</p>
-        <p style="margin:0;font-size:13px;word-break:break-all;">
-          <a href="${confirmUrl}" style="color:${MUTED};">${confirmUrl}</a></p>`,
-    }),
-    text: `${greeting}
-
-Welcome to ${siteConfig.name}. Your verification code is:
-
-    ${spaced}
-
-Enter it on the signup screen to finish. It expires in an hour and works once.
-
-Not on that screen any more? Use this link instead:
-${confirmUrl}
-
-If you weren't expecting this, you can ignore it.`,
-  };
-}
-
-function escapeHtml(s: string) {
+export function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
   );
 }
+
+/**
+ * The receipt someone gets the moment their seat is paid for.
+ *
+ * Leads with the booking reference because that is the thing they will be
+ * asked for on WhatsApp, and puts the money in plain figures — what was paid
+ * now, and what (if anything) is still owed. A confirmation that hides the
+ * balance is how a traveller arrives at the pickup point believing they had
+ * paid in full.
+ */

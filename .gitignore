@@ -29,6 +29,9 @@ node_modules
 
 # ── Local-only agent config ──
 .claude/settings.local.json
+# Dev-server launch config for the agent's browser preview. Points at a
+# local port and is regenerated on demand, so it's machine state.
+.claude/launch.json
 
 # ── Build output & tooling ──
 # This repo is separate from the parent, so it can't inherit its rules.

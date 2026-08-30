@@ -62,7 +62,9 @@ const schema = z
     gstPercent: z.coerce.number().int().min(0).max(100).default(5),
     tcsPercent: z.coerce.number().int().min(0).max(100).default(0),
 
-    razorpayEnabled: z.coerce.boolean().default(false),
+    // Defaults TRUE: the form no longer posts this field, and an absent
+    // checkbox must not silently switch a trip's payments off.
+    razorpayEnabled: z.coerce.boolean().default(true),
     autoCloseWhenFull: z.coerce.boolean().default(true),
     showSeatsLeft: z.coerce.boolean().default(true),
 
@@ -127,7 +129,7 @@ async function uniqueSlug(base: string, ignoreId?: string) {
 function parse(formData: FormData) {
   const raw = Object.fromEntries(formData.entries());
   // Unchecked checkboxes simply aren't in FormData, so absence means false.
-  for (const key of ["razorpayEnabled", "autoCloseWhenFull", "showSeatsLeft", "isFeatured"]) {
+  for (const key of ["autoCloseWhenFull", "showSeatsLeft", "isFeatured"]) {
     raw[key] = formData.get(key) === "on" ? "true" : "";
   }
   return schema.safeParse(raw);
@@ -180,6 +182,74 @@ function buildData(d: z.infer<typeof schema>) {
     ...(d.moodboard !== undefined ? { moodboard: d.moodboard as Prisma.InputJsonValue } : {}),
     ...(d.cancellationPolicy !== undefined ? { cancellationPolicy: d.cancellationPolicy as Prisma.InputJsonValue } : {}),
   };
+}
+
+/**
+ * The master on/off switch for a trip, from the list.
+ *
+ * Deactivating does two things together, because they are one decision in
+ * practice: it clears `isActive` AND archives the trip. Keeping a switched-off
+ * trip sitting at "Live on site" was the confusing part — the badge claimed
+ * one thing and the site did another. Archived says what actually happened.
+ *
+ * Reactivating puts it back to PUBLISHED, but only if it is currently
+ * ARCHIVED. A DRAFT that gets switched on stays a DRAFT: it was never
+ * finished, and silently publishing half-written copy is a worse outcome than
+ * making someone set the status themselves.
+ *
+ * Neither direction touches bookings or seat counts. People who already
+ * booked keep their booking and their /account link; the trip simply stops
+ * being sellable. Cancelling a departure is a different decision and goes
+ * through the bookings screen.
+ */
+export async function setTripActive(
+  tripId: string,
+  active: boolean,
+): Promise<{ error?: string }> {
+  const admin = await requireAdmin();
+
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { id: true, slug: true, status: true, isActive: true },
+  });
+  if (!trip) return { error: "That trip no longer exists." };
+  if (trip.isActive === active) return {};
+
+  const status = active
+    ? trip.status === "ARCHIVED"
+      ? ("PUBLISHED" as const)
+      : trip.status
+    : ("ARCHIVED" as const);
+
+  await prisma.$transaction([
+    prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        isActive: active,
+        status,
+        // Stamp the first time it actually goes live, and leave it alone
+        // afterwards — the date should say when the trip first appeared, not
+        // when it was last toggled.
+        ...(active && status === "PUBLISHED" ? { publishedAt: new Date() } : {}),
+      },
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorProfileId: admin.id,
+        action: active ? "trip.activate" : "trip.deactivate",
+        entity: "trip",
+        entityId: tripId,
+        before: { isActive: trip.isActive, status: trip.status },
+        after: { isActive: active, status },
+      },
+    }),
+  ]);
+
+  revalidatePath("/admin/trips");
+  revalidatePath("/trips");
+  revalidatePath(`/trips/${trip.slug}`);
+  revalidatePath("/");
+  return {};
 }
 
 export async function createTrip(

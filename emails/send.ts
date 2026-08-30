@@ -26,7 +26,18 @@ function resend() {
   return client;
 }
 
-export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
+/**
+ * `deduped` distinguishes "we sent it" from "it had already gone".
+ *
+ * Both are successes and neither should make a caller retry, but a cron
+ * reporting how much work it did must not count a suppressed duplicate as
+ * an email it sent — that turns a re-run into a report of activity that
+ * never happened, which is exactly the number someone watches to decide
+ * whether the job is working.
+ */
+export type SendResult =
+  | { ok: true; id: string | null; deduped?: boolean }
+  | { ok: false; error: string };
 
 export async function sendEmail({
   to,
@@ -58,7 +69,7 @@ export async function sendEmail({
     });
     // Only a previous FAILURE is worth retrying; anything else already went.
     if (already && already.status !== "FAILED") {
-      return { ok: true, id: null };
+      return { ok: true, id: null, deduped: true };
     }
   }
 

@@ -143,7 +143,12 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
           {!isSoldOut && trip.showSeatsLeft && (
             <p className="mt-6 inline-flex items-center gap-2 rounded-full border border-yellow/30 bg-yellow/10 px-4 py-2 text-sm font-semibold text-yellow">
               <span className="pulse-dot" />
-              Only {trip.seatsAvailable} of {trip.seatsTotal} seats left
+              {/* "Only 20 of 20 seats left" on a batch nobody has booked is
+                  both nonsense and false urgency. State the size instead, and
+                  save the scarcity wording for when it's earned. */}
+              {trip.seatsAvailable >= trip.seatsTotal
+                ? `${trip.seatsTotal} seats on this departure`
+                : `Only ${trip.seatsAvailable} of ${trip.seatsTotal} seats left`}
             </p>
           )}
 

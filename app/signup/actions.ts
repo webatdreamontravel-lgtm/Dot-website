@@ -5,12 +5,12 @@ import { z } from "zod";
 
 import { resolveDestination } from "@/lib/auth";
 import { parseDateFilter } from "@/lib/dates";
-import { sendEmail } from "@/lib/email/send";
-import { verificationEmail } from "@/lib/email/templates";
+import { sendEmail } from "@/emails";
+import { verificationEmail } from "@/emails";
 import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { siteUrl } from "@/lib/siteUrl";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type SignupState = {
   status: "idle" | "sent" | "error";
@@ -31,10 +31,10 @@ const schema = z.object({
     .string()
     .trim()
     .min(1, "Phone number is required")
-    .refine((v) => {
-      const digits = v.replace(/\D/g, "");
-      return digits.length >= 10 && digits.length <= 15;
-    }, "Enter a valid phone number"),
+    .refine(isValidPhone, "Enter a 10-digit mobile number")
+    // Stored as ten national digits, so the same number can never arrive
+    // as three different strings.
+    .transform(toNationalDigits),
   state: z.string().trim().min(1, "Choose your state"),
   city: z.string().trim().min(2, "Which city?").max(80),
   dateOfBirth: z
@@ -176,9 +176,8 @@ export async function signUp(_prev: SignupState, formData: FormData): Promise<Si
   const sent = await deliver({
     email,
     fullName,
-    nextPath,
-    hashedToken: data.properties.hashed_token,
     code: data.properties.email_otp,
+    hashedToken: data.properties.hashed_token,
   });
 
   if (!sent) {
@@ -219,9 +218,8 @@ export async function resendVerification(
     await deliver({
       email,
       fullName: profile?.fullName ?? null,
-      nextPath,
-      hashedToken: data.properties.hashed_token,
       code: data.properties.email_otp,
+      hashedToken: data.properties.hashed_token,
     });
   } else if (error) {
     console.error("[signup] resend generateLink failed", error.message);
@@ -316,34 +314,30 @@ async function claimPreCreatedAccount({
   return deliver({
     email,
     fullName,
-    nextPath,
-    hashedToken: data.properties.hashed_token,
     code: data.properties.email_otp,
+    hashedToken: data.properties.hashed_token,
   });
 }
 
 async function deliver({
   email,
   fullName,
-  nextPath,
-  hashedToken,
   code,
+  hashedToken,
 }: {
   email: string;
   fullName: string | null;
-  nextPath: string;
-  hashedToken: string;
   code: string;
+  /**
+   * Only used to key the dedupe. Kept rather than switching to `code`
+   * because it is already a hash — the code itself is a live secret for an
+   * hour, and email_log.dedupe_key is not the place to keep one.
+   */
+  hashedToken: string;
 }) {
-  // Resolved from the running deployment rather than hardcoded, so a link
-  // emailed from staging opens staging and one from production opens
-  // production, with no env var to remember.
-  const confirmUrl = new URL("/auth/confirm", siteUrl());
-  confirmUrl.searchParams.set("token_hash", hashedToken);
-  confirmUrl.searchParams.set("type", "email");
-  if (nextPath) confirmUrl.searchParams.set("next", nextPath);
-
-  const mail = verificationEmail({ name: fullName, code, confirmUrl: confirmUrl.toString() });
+  // No link is built any more — verification is the code alone. See the note
+  // on verificationEmail for why.
+  const mail = verificationEmail({ name: fullName, code });
 
   const result = await sendEmail({
     to: email,

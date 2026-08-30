@@ -62,7 +62,9 @@ export const BOOKING_TONE: Record<string, { tone: string; label: string }> = {
   REQUESTED: { tone: "info", label: "Request" },
   PENDING_PAYMENT: { tone: "warn", label: "Pending payment" },
   CANCELLED: { tone: "bad", label: "Cancelled" },
-  REFUNDED: { tone: "mute", label: "Refunded" },
+  REFUNDED: { tone: "mute", label: "Refunded in full" },
+  PARTIALLY_REFUNDED: { tone: "mute", label: "Partly refunded" },
+  CARRIED_FORWARD: { tone: "info", label: "Carried forward" },
   EXPIRED: { tone: "mute", label: "Expired" },
 };
 
@@ -72,8 +74,16 @@ export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
   UNPAID: { tone: "bad", label: "Unpaid" },
 };
 
+/**
+ * Where a trip is in its editorial life.
+ *
+ * Distinct from `isActive`, which is the master on/off switch and outranks
+ * this. A trip must be BOTH live and active to appear on the site — so a
+ * finished trip can be pulled temporarily without being demoted back to
+ * Draft and losing the fact that it was ever finished.
+ */
 export const TRIP_TONE: Record<string, { tone: string; label: string }> = {
-  PUBLISHED: { tone: "ok", label: "Live" },
+  PUBLISHED: { tone: "ok", label: "Live on site" },
   DRAFT: { tone: "warn", label: "Draft" },
   ARCHIVED: { tone: "mute", label: "Archived" },
 };

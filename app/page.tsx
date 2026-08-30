@@ -2,6 +2,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { Hero } from "@/components/sections/Hero";
 import { UpcomingTrips } from "@/components/sections/UpcomingTrips";
+import { HowItWorks } from "@/components/sections/HowItWorks";
 import { Testimonials } from "@/components/sections/Testimonials";
 import { siteUrl } from "@/lib/siteUrl";
 import { getPublishedReviews } from "@/lib/queries/reviews";
@@ -46,6 +47,7 @@ export default async function HomePage() {
         />
         <Hero />
         <UpcomingTrips trips={trips} />
+        <HowItWorks />
         <Testimonials reviews={reviews} />
       </main>
       <Footer />

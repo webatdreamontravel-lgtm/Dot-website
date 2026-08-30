@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Mail, Instagram, MapPin, Phone, Clock } from "lucide-react";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { WhatsAppIcon } from "@/components/layout/Navbar";
 import { AnimatedHeading } from "@/components/shared/AnimatedHeading";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { legalConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Contact",
@@ -87,9 +88,9 @@ export default function ContactPage() {
                 <li className="flex items-start gap-4">
                   <MapPin className="mt-1 h-5 w-5 flex-shrink-0 text-teal" />
                   <div>
-                    <p className="font-medium">Studio address</p>
+                    <p className="font-medium">Office address</p>
                     <p className="text-navy/65 mt-0.5">
-                      {siteConfig.address.line1},<br />
+                      {legalConfig.addressLines.join(", ")}<br />
                       {siteConfig.address.city}, {siteConfig.address.state} - {siteConfig.address.pincode}<br />
                       {siteConfig.address.country}
                     </p>
@@ -126,48 +127,55 @@ export default function ContactPage() {
               </div>
             </div>
 
-            <form className="lg:col-span-3 rounded-3xl border border-navy/10 bg-cream-soft p-8 md:p-10 space-y-5">
-              <h2 className="font-display text-4xl md:text-5xl">Or just type below.</h2>
-              <p className="text-navy/65">We reply within a day, often sooner.</p>
-              <div className="grid md:grid-cols-2 gap-4">
-                <Field label="Your name" type="text" id="name" placeholder="What should we call you?" />
-                <Field label="Phone or email" type="text" id="contact" placeholder="So we can reply" />
-              </div>
-              <Field label="Which trip are you eyeing?" type="text" id="trip" placeholder="Optional — e.g. Munnar, Vietnam, anything" />
-              <div>
-                <label htmlFor="message" className="text-sm font-medium text-navy/75">Message</label>
-                <textarea
-                  id="message"
-                  rows={5}
-                  placeholder="Hi DOT, I'd like to..."
-                  className="mt-1.5 w-full rounded-xl border border-navy/15 bg-cream px-4 py-3 text-navy placeholder:text-navy/35 focus:border-teal focus:bg-white outline-none transition"
-                />
-              </div>
-              <button type="button" className="btn btn-primary w-full justify-center">
-                Send message
-              </button>
-              <p className="text-xs text-navy/50">
-                This form is non-functional in the preview. Please reach us via WhatsApp or email for the fastest response.
+            {/* The form that was here had no action and no handler — it
+                collected four fields and dropped them, under a note saying
+                so. A contact page whose contact method silently fails is
+                worse than one that doesn't offer it, so these are the
+                channels that actually reach someone. */}
+            <div className="lg:col-span-3 rounded-3xl border border-navy/10 bg-cream-soft p-8 md:p-10">
+              <h2 className="font-display text-4xl md:text-5xl">Talk to us.</h2>
+              <p className="mt-3 text-navy/65">
+                We reply within a day, often sooner. WhatsApp is fastest — it&apos;s where the
+                trip leads actually are.
               </p>
-            </form>
+
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                <a
+                  href={siteConfig.whatsappUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-primary flex-1 justify-center"
+                >
+                  Message us on WhatsApp
+                </a>
+                <a
+                  href={`mailto:${siteConfig.email}`}
+                  className="btn flex-1 justify-center border border-navy/15 bg-cream text-navy hover:bg-white"
+                >
+                  Email us
+                </a>
+              </div>
+
+              <hr className="my-8 border-navy/10" />
+
+              <p className="text-sm font-medium text-navy/75">Booking a specific trip?</p>
+              <p className="mt-1.5 text-navy/65">
+                Go straight to the{" "}
+                <Link href="/trips" className="text-teal underline underline-offset-4">
+                  trip you want
+                </Link>{" "}
+                and book a seat — you&apos;ll see the full price with taxes before anything is
+                confirmed, and we&apos;ll call you to arrange payment.
+              </p>
+
+              <p className="mt-6 text-sm text-navy/55">
+                Prefer the phone? {siteConfig.phone} · {siteConfig.businessHours}
+              </p>
+            </div>
           </div>
         </section>
       </main>
       <Footer />
     </>
-  );
-}
-
-function Field({ label, type, id, placeholder }: { label: string; type: string; id: string; placeholder: string }) {
-  return (
-    <div>
-      <label htmlFor={id} className="text-sm font-medium text-navy/75">{label}</label>
-      <input
-        id={id}
-        type={type}
-        placeholder={placeholder}
-        className="mt-1.5 w-full rounded-xl border border-navy/15 bg-cream px-4 py-3 text-navy placeholder:text-navy/35 focus:border-teal focus:bg-white outline-none transition"
-      />
-    </div>
   );
 }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PolicyPageLayout } from "@/components/shared/PolicyPageLayout";
-import { siteConfig } from "@/lib/data/siteConfig";
+import { paymentsConfig, siteConfig } from "@/lib/data/siteConfig";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -38,7 +38,9 @@ export default function PrivacyPage() {
       <h2>3. Data Sharing</h2>
       <p>We share your information only with:</p>
       <ul>
-        <li><strong>Razorpay</strong> — our payment partner, for processing transactions securely.</li>
+        {paymentsConfig.gatewayLive && (
+          <li><strong>{paymentsConfig.gatewayName}</strong> — our payment partner, for processing transactions securely.</li>
+        )}
         <li><strong>Service providers</strong> — accommodation, transport, activity vendors and visa-on-arrival partners, who require traveler details to deliver your booking.</li>
         <li><strong>Government authorities</strong> — if required by law (e.g. police, courts, tax authorities).</li>
       </ul>
@@ -71,7 +73,11 @@ export default function PrivacyPage() {
 
       <h2>7. Data Security</h2>
       <p>
-        We use industry-standard practices to protect your information — HTTPS for all transmission, access controls on our systems, and PCI-compliant payment processing through Razorpay. No system is 100% secure, but we take security seriously and notify users of material breaches as required by law.
+        We use industry-standard practices to protect your information — HTTPS for all transmission and access controls on our systems.{" "}
+        {paymentsConfig.gatewayLive
+          ? `Payments are processed on PCI-compliant infrastructure by ${paymentsConfig.gatewayName}.`
+          : "No payment credentials are collected on this website at all, so there are none for us to hold."}{" "}
+        No system is 100% secure, but we take security seriously and notify users of material breaches as required by law.
       </p>
 
       <h2>8. Children&apos;s Privacy</h2>

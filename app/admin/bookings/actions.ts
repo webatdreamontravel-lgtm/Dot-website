@@ -7,18 +7,21 @@ import { requireAdmin } from "@/lib/auth";
 import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { seatsCounted } from "@/lib/booking/seats";
+import {
+  notifyCreditIssued,
+  notifyOfflineRefund,
+  notifyPaymentRecorded,
+  notifyStatusChange,
+} from "@/lib/booking/notify";
+import { issueCredit } from "@/lib/credit/ledger";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
+import {
+  reminderSelect,
+  sendBalanceReminder,
+} from "@/lib/payments/balanceReminder";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
-
-/**
- * Which booking states occupy a seat.
- *
- * The single fact every seat adjustment below depends on. PENDING_PAYMENT
- * doesn't count because those seats are held by a seat_hold row instead —
- * counting them here would take the same seat twice.
- */
-const SEAT_HOLDING = new Set(["REQUESTED", "CONFIRMED"]);
-const seatsCounted = (status: string) => SEAT_HOLDING.has(status);
 
 /**
  * Moves a trip's booked-seat count.
@@ -103,7 +106,7 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
   const data = parsed.data;
 
   try {
-    const slug = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: data.bookingId },
         select: {
@@ -112,6 +115,29 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         },
       });
       if (!booking) throw new Error("Booking not found.");
+
+      /**
+       * Never take more than is owed.
+       *
+       * Enforced here as well as in the form, because the form is one client
+       * and this is the rule. Overpaying is not a harmless slip: it inflates
+       * amount_paid_paise, which is what the refund ceiling, the trip's
+       * "owed to them" and bookings_refund_within_paid are all measured
+       * from — so a stray zero becomes money the system believes it must
+       * send back.
+       *
+       * A booking that genuinely needs more paid should be repriced first;
+       * the balance then exists and this passes.
+       */
+      const owedPaise = booking.totalPaise - booking.amountPaidPaise;
+      if (owedPaise <= 0) {
+        throw new Error("SAFE:This booking is already paid in full.");
+      }
+      if (data.amountPaise > owedPaise) {
+        throw new Error(
+          `SAFE:Only ₹${(owedPaise / 100).toLocaleString("en-IN")} is outstanding on this booking.`,
+        );
+      }
 
       await tx.payment.create({
         data: {
@@ -162,10 +188,25 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         { amountPaidPaise: booking.amountPaidPaise, status: booking.status },
         { amountPaidPaise: paid, status: nextStatus, method: data.method });
 
-      return booking.trip.slug;
+      return {
+        slug: booking.trip.slug,
+        // Whether this payment is what confirmed the booking decides which
+        // email the customer gets — a confirmation, or a receipt.
+        justConfirmed: nextStatus === "CONFIRMED" && booking.status !== "CONFIRMED",
+      };
     });
 
-    revalidateBooking(slug);
+    // Outside the transaction on purpose: a mail provider being down must
+    // not roll back money the team has already taken in cash.
+    await notifyPaymentRecorded({
+      bookingId: data.bookingId,
+      amountPaise: data.amountPaise,
+      method: data.method,
+      externalReference: data.externalReference || null,
+      justConfirmed: result.justConfirmed,
+    });
+
+    revalidateBooking(result.slug);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't record that payment.");
@@ -174,7 +215,10 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
 
 const statusSchema = z.object({
   bookingId: z.string().uuid(),
-  status: z.enum(["PENDING_PAYMENT", "REQUESTED", "CONFIRMED", "CANCELLED", "REFUNDED", "EXPIRED"]),
+  status: z.enum([
+    "PENDING_PAYMENT", "REQUESTED", "CONFIRMED",
+    "CANCELLED", "REFUNDED", "PARTIALLY_REFUNDED", "EXPIRED",
+  ]),
   reason: z.string().trim().max(300).optional().or(z.literal("")),
 });
 
@@ -195,13 +239,15 @@ export async function updateBookingStatus(
   const { bookingId, status, reason } = parsed.data;
 
   try {
-    const slug = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: bookingId },
         select: { id: true, status: true, seats: true, trip: { select: { id: true, slug: true } } },
       });
       if (!booking) throw new Error("Booking not found.");
-      if (booking.status === status) return booking.trip.slug;
+      // No change, no email. Re-saving the same status must not chase the
+      // customer with a second copy of news they already had.
+      if (booking.status === status) return { slug: booking.trip.slug, changed: false };
 
       const was = seatsCounted(booking.status);
       const now = seatsCounted(status);
@@ -226,10 +272,14 @@ export async function updateBookingStatus(
       await audit(tx, admin.id, "booking.status_changed", booking.id,
         { status: booking.status }, { status, reason: reason || null });
 
-      return booking.trip.slug;
+      return { slug: booking.trip.slug, changed: true };
     });
 
-    revalidateBooking(slug);
+    if (result.changed) {
+      await notifyStatusChange({ bookingId, status, reason: reason || null });
+    }
+
+    revalidateBooking(result.slug);
     return { ok: true };
   } catch (e) {
     return fail(e, "Couldn't update the booking.");
@@ -337,7 +387,16 @@ const detailsSchema = z.object({
       z.object({
         id: z.string().uuid(),
         fullName: z.string().trim().min(2, "Name is required").max(120),
-        phone: z.string().trim().max(20).optional().or(z.literal("")),
+        // Optional here — the admin edits an existing traveller and may be
+        // fixing only a name — but anything present is normalised, so an
+        // edit can't reintroduce a "+91…" variant of a number we already hold.
+        phone: z
+          .string()
+          .trim()
+          .refine((v) => v === "" || isValidPhone(v), "Enter a 10-digit mobile number")
+          .transform(toNationalDigits)
+          .optional()
+          .or(z.literal("")),
         email: z.string().trim().max(160).optional().or(z.literal("")),
       }),
     )
@@ -400,10 +459,388 @@ function revalidateBooking(tripSlug: string) {
 
 function fail(e: unknown, fallback: string): ActionResult {
   const message = e instanceof Error ? e.message : String(e);
-  // Messages thrown deliberately above are safe and useful to show; anything
-  // else is a database error the customer-facing team can't act on.
+
+  /**
+   * Which errors are safe to show.
+   *
+   * A "SAFE:" prefix is the explicit way to say so at the throw site, which
+   * is where the author knows whether the text is a sentence for a person or
+   * a Postgres constraint name. The regex below predates it and still covers
+   * the older throws; new ones should use the prefix rather than grow it.
+   */
+  if (message.startsWith("SAFE:")) return { ok: false, error: message.slice(5) };
+
   const safe =
     /available|not found|isn't on this booking|already cancelled|only traveller left/i.test(message);
   if (!safe) console.error("[admin/bookings]", e);
   return { ok: false, error: safe ? message : fallback };
+}
+
+/**
+ * Sends money back through Razorpay.
+ *
+ * Kept in this file rather than lib/payments so the admin screens have one
+ * import for every booking action; the arithmetic and the API call live in
+ * lib/payments/refunds.ts.
+ *
+ * Note what this does NOT do: mark the booking refunded. Razorpay confirms
+ * refunds asynchronously, so `refunded_paise` is only written when the
+ * refund.processed webhook arrives. Until then the admin shows the refund as
+ * pending, which is the truth — the money has been asked for, not moved.
+ */
+const refundSchema = z.object({
+  reference: z.string().trim().min(1),
+  amountRupees: z.coerce.number().positive("Enter an amount greater than zero"),
+  reason: z.string().trim().max(300).optional().or(z.literal("")),
+  notes: z.string().trim().max(500).optional().or(z.literal("")),
+});
+
+export async function refundBooking(
+  input: z.input<typeof refundSchema>,
+): Promise<ActionResult> {
+  const admin = await requireAdmin();
+
+  const parsed = refundSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the amount and try again." };
+  }
+  const data = parsed.data;
+
+  const booking = await prisma.booking.findUnique({
+    where: { reference: data.reference },
+    select: { id: true, trip: { select: { slug: true } } },
+  });
+  if (!booking) return { ok: false, error: "That booking no longer exists." };
+
+  try {
+    const { requestRefund } = await import("@/lib/payments/refunds");
+    const result = await requestRefund({
+      bookingId: booking.id,
+      amountPaise: Math.round(data.amountRupees * 100),
+      reason: data.reason || undefined,
+      notes: data.notes || undefined,
+      initiatedByProfileId: admin.id,
+    });
+
+    if (!result.ok) return { ok: false, error: result.error };
+
+    await prisma.auditLog.create({
+      data: {
+        actorProfileId: admin.id,
+        action: "refund.requested",
+        entity: "booking",
+        entityId: booking.id,
+        after: { amountPaise: result.amountPaise, reason: data.reason || null },
+      },
+    });
+
+    revalidatePath(`/admin/bookings/${data.reference}`);
+    revalidatePath("/admin/bookings");
+    revalidatePath(`/trips/${booking.trip.slug}`);
+    return { ok: true };
+  } catch (e) {
+    return fail(e, "Couldn't start that refund.");
+  }
+}
+
+/**
+ * Sends a balance reminder now, from the booking screen.
+ *
+ * Exists because the automated schedule can't know that someone just rang to
+ * say they'd pay, or that a trip lead wants a nudge sent before a WhatsApp
+ * call. It sends the SAME email the cron would — one template, so a manual
+ * nudge can never drift from the automated one.
+ *
+ * Deduped on the calendar date in its own namespace, which does two things:
+ * a double-clicked button sends once, but a human can still nudge someone
+ * today even if this morning's automated reminder already went out.
+ */
+export async function sendBalanceReminderNow(
+  reference: string,
+): Promise<ActionResult & { info?: string }> {
+  const admin = await requireAdmin();
+
+  const booking = await prisma.booking.findUnique({
+    where: { reference },
+    select: reminderSelect,
+  });
+  if (!booking) return { ok: false, error: "That booking no longer exists." };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const result = await sendBalanceReminder(booking, {
+    dedupeKey: `balance_reminder:manual:${booking.id}:${today}`,
+  });
+
+  if (!result.ok) return { ok: false, error: result.error };
+
+  // A second click on the same day. The button already promises this won't
+  // send twice, so it is the expected outcome and not an error — but it must
+  // not report a send that didn't happen either.
+  if (!result.sent && result.reason === "already-sent") {
+    return { ok: true, info: "Already sent today — nothing sent again." };
+  }
+
+  if (!result.sent) {
+    const why: Record<string, string> = {
+      "no-balance": "Nothing to chase — this booking is fully paid.",
+      "no-email": "No email address on this booking.",
+      "not-active": "This booking isn't active, so there's no balance to chase.",
+    };
+    return { ok: false, error: why[result.reason] ?? "Nothing was sent." };
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorProfileId: admin.id,
+      action: "booking.reminder_sent",
+      entity: "booking",
+      entityId: booking.id,
+      after: { to: result.to },
+    },
+  });
+
+  revalidatePath(`/admin/bookings/${reference}`);
+  return { ok: true, info: `Reminder sent to ${result.to}` };
+}
+
+
+const carryForwardSchema = z.object({
+  reference: z.string().trim().min(1),
+  /**
+   * What the customer gets as travel credit, in rupees. Typed by the admin
+   * rather than derived: the cancellation charge is a judgement call, and a
+   * goodwill top-up above what was paid is a real thing the team does.
+   */
+  creditRupees: z.coerce.number().positive("Enter a credit amount greater than zero"),
+  note: z.string().trim().max(300).optional().or(z.literal("")),
+  /**
+   * Set by the second click when the credit exceeds what was paid. The server
+   * re-derives that condition rather than trusting the flag — this only
+   * records that a human was shown the number and agreed to it.
+   */
+  confirmedAbovePaid: z.boolean().optional(),
+});
+
+/**
+ * Cancels a booking and keeps the money as travel credit.
+ *
+ * Deliberately its own action rather than a branch of updateBookingStatus:
+ * it needs an amount, it writes to a second table, and it sends a different
+ * email. Folding it into the generic status change would mean every status
+ * update carrying an optional credit amount that is meaningless for six of
+ * the seven values.
+ *
+ * The seat movement is identical to cancelling — CARRIED_FORWARD is not a
+ * seat-occupying status — so it reuses the same shiftSeats path rather than
+ * repeating the arithmetic.
+ */
+export async function carryBookingForward(
+  input: z.input<typeof carryForwardSchema>,
+): Promise<ActionResult & { info?: string }> {
+  const admin = await requireAdmin();
+
+  const parsed = carryForwardSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the amount." };
+  }
+  const d = parsed.data;
+  const creditPaise = Math.round(d.creditRupees * 100);
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { reference: d.reference },
+        select: {
+          id: true, status: true, seats: true, profileId: true,
+          amountPaidPaise: true, refundedPaise: true,
+          trip: { select: { id: true, slug: true } },
+        },
+      });
+      if (!booking) throw new Error("That booking no longer exists.");
+      if (booking.status === "CARRIED_FORWARD") {
+        throw new Error("This booking has already been carried forward.");
+      }
+
+      /**
+       * Measured against what we still HOLD, not what was paid.
+       *
+       * A booking that took ₹6,300 and already sent ₹2,000 back is holding
+       * ₹4,300 — carrying ₹6,300 forward would be inventing ₹2,000 we no
+       * longer have. Giving away more than that is still allowed, but only
+       * with a second click.
+       */
+      const heldPaise = booking.amountPaidPaise - booking.refundedPaise;
+      if (creditPaise > heldPaise && !d.confirmedAbovePaid) {
+        throw new Error("ABOVE_PAID");
+      }
+
+      if (seatsCounted(booking.status)) {
+        await shiftSeats(tx, booking.trip.id, -booking.seats);
+      }
+
+      await tx.booking.update({
+        where: { id: booking.id },
+        data: {
+          status: "CARRIED_FORWARD",
+          cancelledAt: new Date(),
+          cancellationReason: d.note || null,
+        },
+      });
+
+      await issueCredit(tx, {
+        profileId: booking.profileId,
+        amountPaise: creditPaise,
+        sourceBookingId: booking.id,
+        createdByProfileId: admin.id,
+        note: d.note || null,
+      });
+
+      await audit(tx, admin.id, "booking.carried_forward", booking.id,
+        { status: booking.status, amountPaidPaise: booking.amountPaidPaise },
+        { status: "CARRIED_FORWARD", creditPaise });
+
+      return { slug: booking.trip.slug, bookingId: booking.id };
+    });
+
+    // Outside the transaction: a mail outage must not undo a cancellation.
+    await notifyCreditIssued({ bookingId: result.bookingId, creditPaise });
+
+    revalidateBooking(result.slug);
+    revalidatePath("/admin/credit");
+    return { ok: true, info: `₹${(creditPaise / 100).toLocaleString("en-IN")} of travel credit issued.` };
+  } catch (e) {
+    if (e instanceof Error && e.message === "ABOVE_PAID") {
+      return { ok: false, error: "ABOVE_PAID" };
+    }
+    return fail(e, "Couldn't carry that booking forward.");
+  }
+}
+
+
+const offlineRefundSchema = z.object({
+  reference: z.string().trim().min(1),
+  amountRupees: z.coerce.number().positive("Enter an amount greater than zero"),
+  method: z.enum(["CASH", "UPI", "BANK_TRANSFER", "OTHER"]),
+  externalReference: z.string().trim().max(120).optional().or(z.literal("")),
+  reason: z.string().trim().max(300).optional().or(z.literal("")),
+});
+
+/**
+ * Records money the team gave back themselves.
+ *
+ * Cash across a table, a GPay transfer, a bank deposit — none of which
+ * Razorpay knows about, and all of which happen. Without this the only way
+ * to reflect them was to leave the booking looking unrefunded, or to raise a
+ * Razorpay refund for money that had already left by another route.
+ *
+ * ── Two things differ from the gateway path ──
+ *
+ * It is PROCESSED on arrival, not PENDING. requestRefund waits on a webhook
+ * because Razorpay confirms asynchronously; here the money is already in the
+ * customer's hand by the time anyone types it in, so a pending state would
+ * describe something that has already finished.
+ *
+ * And the ceiling is what we HOLD, not what the gateway holds. Cash can be
+ * given back regardless of how it arrived — the constraint is simply that we
+ * cannot return more than we have.
+ */
+export async function recordOfflineRefund(
+  input: z.input<typeof offlineRefundSchema>,
+): Promise<ActionResult & { info?: string }> {
+  const admin = await requireAdmin();
+
+  const parsed = offlineRefundSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the amount." };
+  }
+  const d = parsed.data;
+  const amountPaise = Math.round(d.amountRupees * 100);
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { reference: d.reference },
+        select: {
+          id: true, amountPaidPaise: true, refundedPaise: true,
+          trip: { select: { slug: true } },
+          payments: {
+            where: { status: "CAPTURED" },
+            orderBy: { capturedAt: "desc" },
+            select: { id: true, amountPaise: true },
+          },
+          creditIssued: { select: { amountPaise: true } },
+        },
+      });
+      if (!booking) throw new Error("SAFE:That booking no longer exists.");
+
+      const creditIssued = booking.creditIssued.reduce((n, c) => n + c.amountPaise, 0);
+      const heldPaise = booking.amountPaidPaise - booking.refundedPaise - creditIssued;
+
+      if (heldPaise <= 0) {
+        throw new Error("SAFE:There is nothing left on this booking to return.");
+      }
+      if (amountPaise > heldPaise) {
+        throw new Error(
+          `SAFE:Only ₹${(heldPaise / 100).toLocaleString("en-IN")} is still held on this booking.`,
+        );
+      }
+
+      /**
+       * Attached to a payment because refunds.payment_id is NOT NULL — the
+       * table has always described money going back out of something. Which
+       * payment barely matters for an offline refund; the largest is picked
+       * so the row reads sensibly next to it.
+       */
+      const source = booking.payments[0];
+      if (!source) throw new Error("SAFE:No payment on this booking to refund against.");
+
+      await tx.refund.create({
+        data: {
+          bookingId: booking.id,
+          paymentId: source.id,
+          amountPaise,
+          // Already handed over. There is nothing to wait for.
+          status: "PROCESSED",
+          processedAt: new Date(),
+          method: d.method,
+          externalReference: d.externalReference || null,
+          reason: d.reason || null,
+          initiatedByProfileId: admin.id,
+        },
+      });
+
+      // Recomputed from PROCESSED rows rather than incremented, so the total
+      // can never drift from the rows it is made of.
+      const agg = await tx.refund.aggregate({
+        where: { bookingId: booking.id, status: "PROCESSED" },
+        _sum: { amountPaise: true },
+      });
+      await tx.booking.update({
+        where: { id: booking.id },
+        data: { refundedPaise: agg._sum.amountPaise ?? 0 },
+      });
+
+      await audit(tx, admin.id, "refund.recorded_offline", booking.id,
+        { refundedPaise: booking.refundedPaise },
+        { refundedPaise: agg._sum.amountPaise ?? 0, amountPaise, method: d.method });
+
+      return { slug: booking.trip.slug, bookingId: booking.id };
+    });
+
+    // Outside the transaction: a mail outage must not undo money already given.
+    await notifyOfflineRefund({
+      bookingId: result.bookingId,
+      amountPaise,
+      method: d.method,
+      reference: d.externalReference || null,
+    });
+
+    revalidateBooking(result.slug);
+    return {
+      ok: true,
+      info: `₹${(amountPaise / 100).toLocaleString("en-IN")} recorded as returned.`,
+    };
+  } catch (e) {
+    return fail(e, "Couldn't record that refund.");
+  }
 }
