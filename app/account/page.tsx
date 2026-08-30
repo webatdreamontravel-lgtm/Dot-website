@@ -4,7 +4,9 @@ import { Compass, Wallet } from "lucide-react";
 
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
+import { creditBalance } from "@/lib/credit/ledger";
 import { requireUser } from "@/lib/auth";
+import { siteConfig } from "@/lib/data/siteConfig";
 import { toRupees } from "@/lib/booking/pricing";
 import { getCustomerBookings, getCustomerSummary } from "@/lib/queries/booking";
 import { signOut } from "@/app/login/actions";
@@ -21,9 +23,10 @@ export default async function AccountPage({ searchParams }: { searchParams: SP }
   const profile = await requireUser("/account");
   const filters = await searchParams;
 
-  const [{ rows, total, page, pageCount }, summary] = await Promise.all([
+  const [{ rows, total, page, pageCount }, summary, creditPaise] = await Promise.all([
     getCustomerBookings(profile.id, filters),
     getCustomerSummary(profile.id),
+    creditBalance(profile.id),
   ]);
 
   const customer = {
@@ -42,6 +45,29 @@ export default async function AccountPage({ searchParams }: { searchParams: SP }
             narrow column pushed everything into a stack on desktop while
             leaving half the screen empty. */}
         <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+          {/* Above the bookings, not inside them.
+              
+              Credit belongs to the person, not to any one booking — and it
+              exists precisely because a booking was cancelled, so putting it
+              on a card would attach it to the trip they are no longer going
+              on. Nobody would find it there. */}
+          {creditPaise > 0 && (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-2xl border border-teal/25 bg-teal/[0.07] px-5 py-4">
+              <div>
+                <p className="font-display text-2xl leading-none text-navy">
+                  {formatINR(toRupees(creditPaise))} travel credit
+                </p>
+                <p className="mt-1.5 text-[0.85rem] leading-relaxed text-navy/65">
+                  Held from a cancelled booking. It doesn&apos;t expire — tell us when you&apos;re
+                  ready to book and we&apos;ll put it towards the cost.
+                </p>
+              </div>
+              <a href={siteConfig.whatsappUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+                Plan your next trip
+              </a>
+            </div>
+          )}
+
           <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
             <div className="min-w-0">
               <h1 className="font-display text-4xl tracking-tight text-navy md:text-5xl">

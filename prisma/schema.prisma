@@ -71,6 +71,14 @@ enum BookingStatus {
   /// The charge itself is not stored: it is amountPaidPaise - refundedPaise,
   /// so it can never disagree with the refund rows it is derived from.
   PARTIALLY_REFUNDED
+  /// Cancelled, and the money kept as travel credit for a future trip
+  /// instead of being sent back. Seats released, but nothing was refunded —
+  /// refundedPaise stays 0 and the cash never left, which is why this is not
+  /// a kind of REFUNDED.
+  ///
+  /// The credit itself lives in credit_entries; this status only records
+  /// what happened to the booking.
+  CARRIED_FORWARD
   /// Hold lapsed before payment. Seats released.
   EXPIRED
 }
@@ -92,11 +100,28 @@ enum RefundStatus {
   FAILED
 }
 
+/// How money was sent back.
+///
+/// RAZORPAY is the only one that is asynchronous — everything else is money
+/// the team has already handed over by the time it is recorded, so those
+/// rows are born PROCESSED and never sit PENDING.
+enum RefundMethod {
+  RAZORPAY
+  CASH
+  UPI
+  BANK_TRANSFER
+  OTHER
+}
+
 enum PaymentMethod {
   RAZORPAY
   UPI_MANUAL
   CASH
   BANK_TRANSFER
+  /// Travel credit spent on this booking. Recorded as a payment so the
+  /// booking's paid total, balance, reminders and reports all work on it
+  /// unchanged — credit is a way of paying, not a parallel money system.
+  CREDIT
   OTHER
 }
 
@@ -118,6 +143,16 @@ enum EmailStatus {
   QUEUED
   SENT
   FAILED
+}
+
+/// What a credit_entries row does to a customer's balance.
+enum CreditKind {
+  /// Created by carrying a cancelled booking forward. Positive.
+  ISSUED
+  /// Spent against a new booking. Negative.
+  REDEEMED
+  /// A correction made by hand. Either sign.
+  ADJUSTED
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -153,6 +188,8 @@ model Profile {
   recordedPayments Payment[]  @relation("RecordedBy")
   initiatedRefunds Refund[]   @relation("RefundInitiatedBy")
   auditEntries     AuditLog[]
+  creditEntries    CreditEntry[] @relation("CreditOwner")
+  createdCredits   CreditEntry[] @relation("CreditCreatedBy")
 
   @@index([phone])
   @@index([role])
@@ -372,6 +409,10 @@ model Booking {
   refunds     Refund[]
   seatHold    SeatHold?
   emails      EmailLog[]
+  /// Credit this booking generated when it was carried forward.
+  creditIssued  CreditEntry[] @relation("CreditSource")
+  /// Credit spent on this booking.
+  creditApplied CreditEntry[] @relation("CreditApplied")
 
   @@index([tripId, status])
   @@index([profileId, createdAt])
@@ -509,6 +550,11 @@ model Refund {
   /// Always positive. Direction is implied by the model, never by sign.
   amountPaise Int          @map("amount_paise")
   status      RefundStatus @default(PENDING)
+  /// How it went back. Defaults to RAZORPAY because every refund that
+  /// predates offline refunds was one.
+  method      RefundMethod @default(RAZORPAY)
+  /// UTR or receipt number for a refund the team made by hand.
+  externalReference String? @map("external_reference")
 
   /// Set once Razorpay accepts the request. Unique so a replayed
   /// refund.processed webhook can't create a second row.
@@ -643,6 +689,51 @@ model AuditLog {
 }
 
 /// Single-row key/value for things the founders can change without a deploy.
+/// Travel credit, as an append-only ledger.
+///
+/// A customer's balance is SUM(amountPaise) over their rows — never stored.
+/// A stored balance alongside a ledger is the worst bug in this category:
+/// when the two disagree there is no way to tell which one lied, and it is
+/// unfixable after the fact. The parts ARE the definition.
+///
+/// Amounts are SIGNED. Issuing adds, redeeming subtracts, and an adjustment
+/// can do either, so the balance is one aggregate with no special cases.
+///
+/// Rows are never updated or deleted. A mistake is corrected with an
+/// ADJUSTED row, so the history of what was promised and spent stays intact.
+model CreditEntry {
+  id   String     @id @default(uuid()) @db.Uuid
+  kind CreditKind
+
+  /// Whose credit. Deliberately never moves: credit is not transferable, so
+  /// there is no flow anywhere that changes this after creation.
+  profileId String @map("profile_id") @db.Uuid
+
+  /// SIGNED paise. + adds to the balance, - spends it.
+  amountPaise Int @map("amount_paise")
+
+  /// The cancelled booking this credit came out of.
+  sourceBookingId String? @map("source_booking_id") @db.Uuid
+  /// The booking it was spent on.
+  appliedBookingId String? @map("applied_booking_id") @db.Uuid
+
+  /// Shown to the customer on their credit history.
+  note String?
+
+  createdByProfileId String?  @map("created_by_profile_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  profile        Profile  @relation("CreditOwner", fields: [profileId], references: [id], onDelete: Cascade)
+  sourceBooking  Booking? @relation("CreditSource", fields: [sourceBookingId], references: [id], onDelete: SetNull)
+  appliedBooking Booking? @relation("CreditApplied", fields: [appliedBookingId], references: [id], onDelete: SetNull)
+  createdBy      Profile? @relation("CreditCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([profileId, createdAt])
+  @@index([sourceBookingId])
+  @@index([appliedBookingId])
+  @@map("credit_entries")
+}
+
 model SiteSetting {
   key       String   @id
   value     Json

@@ -49,23 +49,67 @@ export async function requestRefund(input: {
       },
       refunds: {
         where: { status: { not: "FAILED" } },
-        select: { amountPaise: true },
+        select: { amountPaise: true, method: true },
       },
     },
   });
 
   if (!booking) return { ok: false, error: "That booking no longer exists." };
 
-  const alreadyRefunded = booking.refunds.reduce((n, r) => n + r.amountPaise, 0);
-  const refundable = booking.amountPaidPaise - alreadyRefunded;
+  /**
+   * The ceiling is what RAZORPAY holds, not what the booking was paid.
+   *
+   * A booking settled with ₹1,100 by UPI and ₹1,000 of travel credit has
+   * amountPaidPaise of ₹2,100 — but Razorpay only ever received ₹1,100, and
+   * cannot send back money it never took. Measuring against the booking
+   * total let the screen offer ₹2,100, and the request then failed deep
+   * inside Razorpay's API with a PENDING row already written.
+   *
+   * Credit paid is returned as credit, by carrying the booking forward. It
+   * is not a refund and does not belong in this arithmetic.
+   */
+  const gatewayPaidPaise = Math.min(
+    booking.payments.reduce((n, p) => n + p.amountPaise, 0),
+    // Never more than the booking was actually credited. On bookings taken
+    // before the fee-bearer change, payments.amount_paise is the gross the
+    // card was charged and the difference is Razorpay's fee — money we were
+    // never given and must not send back.
+    booking.amountPaidPaise,
+  );
 
+  /**
+   * Only GATEWAY refunds reduce what the gateway can still send.
+   *
+   * Cash handed over takes nothing out of Razorpay, so counting it here
+   * reported nothing refundable on a booking where Razorpay was still
+   * holding money. Everything non-failed still counts toward `held` below —
+   * the two limits are genuinely different quantities.
+   */
+  const gatewayRefunded = booking.refunds
+    .filter((r) => r.method === "RAZORPAY")
+    .reduce((n, r) => n + r.amountPaise, 0);
+  const allRefunded = booking.refunds.reduce((n, r) => n + r.amountPaise, 0);
+  const heldPaise = booking.amountPaidPaise - allRefunded;
+
+  const refundable = Math.min(gatewayPaidPaise - gatewayRefunded, heldPaise);
+
+  if (gatewayPaidPaise === 0) {
+    return {
+      ok: false,
+      error:
+        "Nothing on this booking was paid through Razorpay, so there is nothing to send back. " +
+        "Return it the way it came in, or carry the booking forward as travel credit.",
+    };
+  }
   if (refundable <= 0) {
-    return { ok: false, error: "Everything paid on this booking has already been refunded." };
+    return { ok: false, error: "Everything paid through Razorpay has already been refunded." };
   }
   if (amountPaise > refundable) {
     return {
       ok: false,
-      error: `Only ₹${(refundable / 100).toLocaleString("en-IN")} is left to refund on this booking.`,
+      error:
+        `Only ₹${(refundable / 100).toLocaleString("en-IN")} was paid through Razorpay and ` +
+        `is still refundable.`,
     };
   }
 

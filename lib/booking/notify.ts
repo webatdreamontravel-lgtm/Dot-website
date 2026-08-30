@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   bookingCancelledEmail,
   bookingConfirmedEmail,
+  creditIssuedEmail,
   paymentReceivedEmail,
   refundFailedAdminEmail,
   refundProcessedEmail,
@@ -44,6 +45,7 @@ const notifySelect = {
   seats: true,
   totalPaise: true,
   amountPaidPaise: true,
+  refundedPaise: true,
   cancellationReason: true,
   trip: {
     select: { title: true, slug: true, startDate: true, endDate: true, startingFrom: true },
@@ -179,6 +181,7 @@ export async function notifyStatusChange(input: {
             startDate: booking.trip.startDate,
             seats: booking.seats,
             paidPaise: booking.amountPaidPaise,
+            refundedPaise: booking.refundedPaise,
             reason: input.reason ?? booking.cancellationReason,
           });
 
@@ -282,5 +285,100 @@ export async function notifyRefundOutcome(input: {
     });
   } catch (e) {
     console.error("[notify] refund outcome email failed", e);
+  }
+}
+
+
+/**
+ * A cancelled booking whose money became travel credit.
+ *
+ * Its own notification rather than a branch of notifyStatusChange, because
+ * the amount is not derivable from the booking: the credit can be less than
+ * what was paid (a cancellation charge) or more (goodwill), and only the
+ * caller knows which.
+ */
+export async function notifyCreditIssued(input: { bookingId: string; creditPaise: number }) {
+  try {
+    const booking = await loadBooking(input.bookingId);
+    if (!booking) return;
+    const { to, name } = recipient(booking);
+    if (!to) return;
+
+    const mail = creditIssuedEmail({
+      name,
+      reference: booking.reference,
+      tripTitle: booking.trip.title,
+      creditPaise: input.creditPaise,
+      note: booking.cancellationReason,
+    });
+
+    await sendEmail({
+      to,
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      template: "credit_issued",
+      bookingId: booking.id,
+      // Keyed on the booking: carrying one forward twice is not a thing, and
+      // a double-clicked button must not send two of these.
+      dedupeKey: `credit_issued:${booking.id}`,
+    });
+  } catch (e) {
+    console.error("[notify] credit issued email failed", e);
+  }
+}
+
+
+/**
+ * Money the team returned by hand.
+ *
+ * Sent immediately, unlike the gateway path — there is no webhook to wait
+ * for because the cash is already in their hand or the transfer already
+ * made. The template varies its own timing sentence by method, so this only
+ * has to say which one it was.
+ */
+export async function notifyOfflineRefund(input: {
+  bookingId: string;
+  amountPaise: number;
+  method: string;
+  reference: string | null;
+}) {
+  try {
+    const booking = await loadBooking(input.bookingId);
+    if (!booking) return;
+    const { to, name } = recipient(booking);
+    if (!to) return;
+
+    const mail = refundProcessedEmail({
+      name,
+      reference: booking.reference,
+      tripTitle: booking.trip.title,
+      amountPaise: input.amountPaise,
+      refundedTotalPaise: booking.refundedPaise,
+      paidPaise: booking.amountPaidPaise,
+      method: input.method,
+      externalReference: input.reference,
+    });
+
+    await sendEmail({
+      to,
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      template: "refund_processed",
+      bookingId: booking.id,
+      /**
+       * Keyed on the amount and the day, not the booking.
+       *
+       * There is no refund id to key on — these never reach Razorpay. Two
+       * genuinely separate hand-backs on one booking are two emails, while a
+       * double-clicked button is one.
+       */
+      dedupeKey: `refund_offline:${booking.id}:${input.amountPaise}:${new Date()
+        .toISOString()
+        .slice(0, 10)}`,
+    });
+  } catch (e) {
+    console.error("[notify] offline refund email failed", e);
   }
 }

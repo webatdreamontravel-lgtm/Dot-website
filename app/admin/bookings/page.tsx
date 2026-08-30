@@ -112,9 +112,11 @@ export default async function AdminBookingsPage({ searchParams }: { searchParams
                               <span className="font-display text-[0.95rem] font-semibold text-[#0f8a5f]">
                                 {formatINR(rupees(b.netHeldPaise))}
                               </span>
-                              {b.refundedPaise > 0 && (
+                              {(b.refundedPaise > 0 || b.creditIssuedPaise > 0) && (
                                 <span className="mt-0.5 block text-[0.72rem] font-normal text-[#8b96ad]">
-                                  {formatINR(rupees(b.amountPaidPaise))} − {formatINR(rupees(b.refundedPaise))}
+                                  {formatINR(rupees(b.amountPaidPaise))}
+                                  {b.refundedPaise > 0 && ` − ${formatINR(rupees(b.refundedPaise))}`}
+                                  {b.creditIssuedPaise > 0 && ` − ${formatINR(rupees(b.creditIssuedPaise))} credit`}
                                 </span>
                               )}
                             </td>

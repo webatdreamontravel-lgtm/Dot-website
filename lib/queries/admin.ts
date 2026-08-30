@@ -475,13 +475,33 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
  * one can ever be non-zero.
  */
 function withPaymentState<
-  T extends { totalPaise: number; amountPaidPaise: number; refundedPaise: number },
+  T extends {
+    status: string;
+    totalPaise: number;
+    amountPaidPaise: number;
+    refundedPaise: number;
+    creditIssued?: { amountPaise: number }[];
+  },
 >(b: T) {
-  const netHeld = b.amountPaidPaise - b.refundedPaise;
-  const balance = Math.max(b.totalPaise - netHeld, 0);
-  const overpaid = Math.max(netHeld - b.totalPaise, 0);
+  // Money that left this booking for the customer's credit ledger. It belongs
+  // to the person now, so counting it as held here would show the same rupees
+  // in two places.
+  const creditIssued = (b.creditIssued ?? []).reduce((n, c) => n + c.amountPaise, 0);
+  const netHeld = b.amountPaidPaise - b.refundedPaise - creditIssued;
+
+  /**
+   * A closed booking owes nothing in either direction.
+   *
+   * A carried-forward booking holding a ₹200 cancellation charge against a
+   * ₹4,200 trip would otherwise report a ₹4,000 balance — money nobody owes
+   * on a trip nobody is going on.
+   */
+  const settled = !["PENDING_PAYMENT", "REQUESTED", "CONFIRMED"].includes(b.status);
+  const balance = settled ? 0 : Math.max(b.totalPaise - netHeld, 0);
+  const overpaid = settled ? 0 : Math.max(netHeld - b.totalPaise, 0);
   return {
     ...b,
+    creditIssuedPaise: creditIssued,
     netHeldPaise: netHeld,
     balancePaise: balance,
     overpaidPaise: overpaid,
@@ -509,6 +529,7 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
     select: {
       id: true, reference: true, status: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      creditIssued: { select: { amountPaise: true } },
       trip: { select: { title: true, slug: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
       // Lead traveller doubles as the fallback name: profiles created by a
@@ -564,6 +585,7 @@ export async function getBookingsForTrip(
     select: {
       id: true, reference: true, status: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      creditIssued: { select: { amountPaise: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
       travellers: { select: { fullName: true, phone: true, email: true, cancelledAt: true } },
     },
@@ -591,6 +613,8 @@ export async function getAdminBooking(reference: string) {
       gstPercent: true, gstPaise: true, tcsPercent: true, tcsPaise: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true,
       internalNotes: true, cancellationReason: true,
+      // Money that left this booking for the customer's credit ledger.
+      creditIssued: { select: { amountPaise: true } },
       createdAt: true, confirmedAt: true, cancelledAt: true,
       trip: {
         select: {
@@ -622,8 +646,8 @@ export async function getAdminBooking(reference: string) {
       refunds: {
         orderBy: { createdAt: "desc" },
         select: {
-          id: true, amountPaise: true, status: true, reason: true,
-          razorpayRefundId: true, processedAt: true, createdAt: true,
+          id: true, amountPaise: true, status: true, reason: true, method: true,
+          razorpayRefundId: true, externalReference: true, processedAt: true, createdAt: true,
           failureReason: true,
           initiatedBy: { select: { fullName: true, email: true } },
         },
@@ -938,6 +962,7 @@ export async function getCustomerBookings(
     select: {
       id: true, reference: true, status: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      creditIssued: { select: { amountPaise: true } },
       trip: { select: { title: true, batchName: true, startDate: true, slug: true } },
     },
   });

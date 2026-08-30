@@ -10,6 +10,8 @@ import { searchCustomers } from "@/lib/queries/admin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
 import { nextBookingReference } from "@/lib/booking/reference";
+import { creditBalance, creditBalances, redeemCredit } from "@/lib/credit/ledger";
+import { amountToPaise } from "@/lib/money";
 
 export type CustomerHit = {
   id: string;
@@ -18,12 +20,16 @@ export type CustomerHit = {
   phone: string | null;
   city: string | null;
   bookings: number;
+  /** Travel credit they can spend. Shown on the row so it can't be missed. */
+  creditPaise: number;
 };
 
 /** Typeahead behind "search for the customer". */
 export async function findCustomers(query: string): Promise<CustomerHit[]> {
   await requireAdmin();
   const rows = await searchCustomers(query);
+  // One grouped query for the page of results rather than one per row.
+  const balances = await creditBalances(rows.map((r) => r.id));
   return rows.map((r) => ({
     id: r.id,
     fullName: r.fullName,
@@ -31,7 +37,14 @@ export async function findCustomers(query: string): Promise<CustomerHit[]> {
     phone: r.phone,
     city: r.city,
     bookings: r._count.bookings,
+    creditPaise: balances.get(r.id) ?? 0,
   }));
+}
+
+/** What one customer can spend, for the form to re-check after selection. */
+export async function getCreditBalance(profileId: string): Promise<number> {
+  await requireAdmin();
+  return creditBalance(profileId);
 }
 
 export type CreateResult =
@@ -71,7 +84,12 @@ const schema = z.object({
   // Optional money taken at the same moment — a festival stall booking is
   // usually paid on the spot.
   paymentAmount: z.string().trim().optional().or(z.literal("")),
-  paymentMethod: z.enum(["CASH", "UPI_MANUAL", "BANK_TRANSFER", "RAZORPAY", "OTHER"]),
+  /**
+   * CREDIT means the amount above comes out of the customer's travel credit
+   * rather than their pocket. It is a method like any other, so the booking's
+   * paid total and balance need no knowledge of credit at all.
+   */
+  paymentMethod: z.enum(["CASH", "UPI_MANUAL", "BANK_TRANSFER", "RAZORPAY", "CREDIT", "OTHER"]),
   paymentReference: z.string().trim().max(120).optional().or(z.literal("")),
 });
 
@@ -169,24 +187,51 @@ export async function createBookingForCustomer(
 
       await tx.$executeRaw`SELECT confirm_seat_hold(${holdId}::uuid, ${booking.id}::uuid)`;
 
-      // Money taken at the same time, if any.
-      const amountPaise = toPaise(d.paymentAmount);
-      if (amountPaise > 0) {
+      /**
+       * Money taken at the same time — cash, and/or travel credit.
+       *
+       * Credit is written as a Payment like any other method, so everything
+       * downstream (paid total, balance, instalments, reminders, reports)
+       * works on it without knowing credit exists. The ledger entry is the
+       * only credit-specific thing here, and it is in the same transaction
+       * as the payment so the two can never disagree.
+       */
+      const paidPaise = toPaise(d.paymentAmount);
+      const byCredit = d.paymentMethod === "CREDIT";
+
+      if (paidPaise > 0) {
+        // Credit spends from the ledger first. Throws with a readable message
+        // if the balance is short, and takes a row lock so two admins
+        // spending the same credit serialise rather than both succeeding.
+        if (byCredit) {
+          await redeemCredit(tx, {
+            profileId,
+            amountPaise: paidPaise,
+            appliedBookingId: booking.id,
+            createdByProfileId: admin.id,
+            note: `Applied to ${ref}`,
+          });
+        }
+
         await tx.payment.create({
           data: {
             bookingId: booking.id,
             method: d.paymentMethod,
             status: "CAPTURED",
-            amountPaise,
+            amountPaise: paidPaise,
             recordedByProfileId: admin.id,
-            externalReference: d.paymentReference || null,
+            externalReference: byCredit ? null : d.paymentReference || null,
+            notes: byCredit ? "Travel credit" : null,
             capturedAt: new Date(),
           },
         });
+      }
+
+      if (paidPaise > 0) {
         await tx.booking.update({
           where: { id: booking.id },
           data: {
-            amountPaidPaise: amountPaise,
+            amountPaidPaise: paidPaise,
             status: "CONFIRMED",
             confirmedAt: new Date(),
           },
@@ -199,7 +244,10 @@ export async function createBookingForCustomer(
           action: "booking.created_by_admin",
           entity: "booking",
           entityId: booking.id,
-          after: { reference: ref, seats: d.seats, source: d.source, status: d.status },
+          after: {
+            reference: ref, seats: d.seats, source: d.source, status: d.status,
+            ...(byCredit && paidPaise > 0 ? { creditAppliedPaise: paidPaise } : {}),
+          },
         },
       });
 
@@ -219,6 +267,10 @@ export async function createBookingForCustomer(
     }
     if (/TRIP_NOT_PUBLISHED/i.test(message)) {
       return { ok: false, error: "That trip isn't published, so seats can't be reserved." };
+    }
+    // The ledger's own message already names the available figure.
+    if (/travel credit is available|CREDIT_INSUFFICIENT/i.test(message)) {
+      return { ok: false, error: message, field: "paymentAmount" };
     }
     console.error("[admin/bookings/new]", e);
     return { ok: false, error: "Couldn't create the booking." };
@@ -283,8 +335,6 @@ async function provisionCustomer(input: {
   return data.user.id;
 }
 
-const toPaise = (v: string | undefined) => {
-  if (!v || !v.trim()) return 0;
-  const n = Number(v.replace(/[^0-9.]/g, ""));
-  return Number.isFinite(n) ? Math.round(n * 100) : 0;
-};
+// Shared with every other money field, so a hand-crafted request is parsed
+// exactly the way the form's own keystroke filter would have parsed it.
+const toPaise = amountToPaise;
