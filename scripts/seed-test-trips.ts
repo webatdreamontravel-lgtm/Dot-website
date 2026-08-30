@@ -136,6 +136,52 @@ const TRIPS: Seed[] = [
     ],
   },
   {
+    slug: "coonoor-test-bench-test",
+    title: "Coonoor Test Bench (TEST)",
+    batchName: "TEST · general payment flow · 20 seats",
+    tagline: "Room to run the same flow twenty times without running out of seats",
+    destination: "Coonoor, Nilgiris",
+    category: "TEST",
+    // Two months out: past every reminder offset, so the nightly cron never
+    // touches it, and far enough that nothing here ages out mid-test.
+    startsInDays: 60,
+    nights: 1,
+    durationLabel: "2 Days, 1 Night",
+    totalSeats: 20,
+    // ₹4,000 + 5% GST = ₹4,200 per seat. Advance ₹1,500, balance ₹2,700.
+    pricePaise: 400_000,
+    advancePaise: 150_000,
+    heroImage: img("photo-1470071459604-3b5ec3a7fe05", 1920),
+    cardImage: img("photo-1502784444187-359ac186c5bb", 1200),
+    intro: [
+      "The one to come back to. Twenty seats and a two-month runway, so the same flow can be run again and again without the trip filling up or the departure creeping into the reminder window.",
+      "Priced so travel credit is a partial payment rather than the whole thing — ₹4,200 a seat against a credit balance of a few thousand leaves a remainder to settle in cash, which is the case worth exercising.",
+    ],
+    itinerary: [
+      { title: "Somewhere to keep testing", body: "Kotagiri exists to be filled and Ooty to be chased for money. This one exists to stay open — six seats and a three-day departure both run out, and re-seeding mid-investigation loses the state you were looking at." },
+    ],
+    inclusions: [
+      h("What this trip is for"),
+      ul([
+        "Repeat runs of any payment path",
+        "Travel credit as a partial payment",
+        "Advance and balance without a reminder firing",
+        "Anything needing a clean, roomy trip",
+      ]),
+    ],
+    exclusions: ["An actual trip to Coonoor"],
+    thingsToKnow: [
+      "₹4,000 per seat + 5% GST = ₹4,200. Advance ₹1,500 per seat, balance ₹2,700.",
+      "20 seats, so sold-out is out of reach unless you go looking for it.",
+      "Departs in about two months — outside every balance reminder offset.",
+    ],
+    moodboard: [
+      { label: "Leisure", value: 1 },
+      { label: "Nature", value: 1 },
+      { label: "Adventure", value: 1 },
+    ],
+  },
+  {
     slug: "ooty-balance-lab-test",
     title: "Ooty Balance Lab (TEST)",
     batchName: "TEST · balances & reminders · departs in 3 days",

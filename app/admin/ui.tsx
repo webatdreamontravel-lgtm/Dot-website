@@ -64,6 +64,7 @@ export const BOOKING_TONE: Record<string, { tone: string; label: string }> = {
   CANCELLED: { tone: "bad", label: "Cancelled" },
   REFUNDED: { tone: "mute", label: "Refunded in full" },
   PARTIALLY_REFUNDED: { tone: "mute", label: "Partly refunded" },
+  CARRIED_FORWARD: { tone: "info", label: "Carried forward" },
   EXPIRED: { tone: "mute", label: "Expired" },
 };
 

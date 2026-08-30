@@ -17,6 +17,7 @@ export { bookingConfirmedEmail } from "./bookingConfirmed";
 export { balanceReminderEmail } from "./balanceReminder";
 export { paymentReceivedEmail } from "./paymentReceived";
 export { bookingCancelledEmail } from "./bookingCancelled";
+export { creditIssuedEmail } from "./creditIssued";
 export { refundProcessedEmail } from "./refundProcessed";
 export { refundFailedAdminEmail } from "./refundFailedAdmin";
 export { seatUnavailableEmail } from "./seatUnavailable";

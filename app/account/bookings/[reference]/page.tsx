@@ -20,6 +20,37 @@ type Params = {
 
 export const metadata: Metadata = { title: "Your booking", robots: { index: false } };
 
+/**
+ * How a payment method is described to the person who made it.
+ *
+ * Not the admin's vocabulary: "UPI_MANUAL" means the team keyed in a transfer
+ * the customer made, which from their side was simply UPI. And RAZORPAY is an
+ * implementation detail — what they remember is paying on the website.
+ */
+const HOW_PAID: Record<string, string> = {
+  RAZORPAY: "Paid online",
+  UPI_MANUAL: "UPI",
+  CASH: "Cash",
+  BANK_TRANSFER: "Bank transfer",
+  CREDIT: "Travel credit",
+  OTHER: "Other",
+};
+
+/**
+ * How money went back, in the customer's terms.
+ *
+ * Only the first has a wait attached to it — everything else was handed over
+ * or transferred by a person, and had already reached them before the page
+ * did. Saying "5 to 7 working days" about cash they are holding is nonsense.
+ */
+const HOW_REFUNDED: Record<string, string> = {
+  RAZORPAY: "Back to the account you paid from",
+  UPI: "By UPI",
+  CASH: "In cash",
+  BANK_TRANSFER: "To your bank account",
+  OTHER: "Returned to you",
+};
+
 export default async function BookingDetailPage({ params, searchParams }: Params) {
   const { reference } = await params;
   const { new: isNew } = await searchParams;
@@ -37,6 +68,52 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   const feesCharged = booking.payments
     .filter((p) => p.status === "CAPTURED")
     .reduce((n, p) => n + p.convenienceFeePaise, 0);
+
+  /**
+   * Worth breaking down when the total can't speak for itself.
+   *
+   * One online payment needs no list — "You paid ₹4,200" and the statement
+   * line below it already say everything. But a booking settled partly in
+   * cash, or partly from travel credit, leaves someone hunting their bank
+   * statement for money that was never going to be there.
+   */
+  const showSplit =
+    booking.payments.length > 1 || booking.payments.some((p) => p.method === "CREDIT");
+
+  /**
+   * The bank-wait notice belongs to gateway refunds and nothing else.
+   *
+   * It used to appear whenever any money had gone back, so someone handed
+   * ₹1,000 in cash across a table was told to expect it in five to seven
+   * working days. Keyed on there actually being a Razorpay refund.
+   */
+  /**
+   * Grouped by method, not listed one per row.
+   *
+   * Two Razorpay refunds a minute apart are one fact to a customer — "₹1,410
+   * back to your card" — and printing the same sentence twice with different
+   * figures reads like a mistake. The dates go with it: a grouped line can't
+   * carry one date honestly.
+   */
+  const refundsByMethod = [...booking.refunds]
+    .reduce<{ method: string; amountPaise: number }[]>((acc, r) => {
+      const found = acc.find((x) => x.method === r.method);
+      if (found) found.amountPaise += r.amountPaise;
+      else acc.push({ method: r.method, amountPaise: r.amountPaise });
+      return acc;
+    }, []);
+
+  /**
+   * The bank-wait notice belongs to the gateway portion, and names only that.
+   *
+   * On a booking refunded ₹1,410 to a card and ₹1,800 in cash, telling
+   * someone "₹3,210 refunded, allow 5–7 working days" sets them looking for
+   * money that is already in their pocket.
+   */
+  const gatewayRefundedPaise = booking.refunds
+    .filter((r) => r.method === "RAZORPAY")
+    .reduce((n, r) => n + r.amountPaise, 0);
+  const showRefundSplit = refundsByMethod.length > 1;
 
   return (
     <>
@@ -104,14 +181,14 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                 who reads it think their booking had failed — and it would
                 spend the one colour this page reserves for actual problems on
                 a message that is, on balance, good news. */}
-            {booking.refundedPaise > 0 && (
+            {gatewayRefundedPaise > 0 && (
               <div className="flex items-start gap-3 border-b border-navy/8 bg-teal/[0.07] px-6 py-4 md:px-8">
                 <span className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-full bg-teal text-cream">
                   <RotateCcw className="h-3.5 w-3.5" aria-hidden />
                 </span>
                 <p className="text-[0.85rem] leading-relaxed text-navy/70">
                   <span className="font-semibold text-navy">
-                    {formatINR(toRupees(booking.refundedPaise))} refunded.
+                    {formatINR(toRupees(gatewayRefundedPaise))} refunded to your card or account.
                   </span>{" "}
                   {REFUND_NOTICE}
                 </p>
@@ -191,6 +268,30 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                     {formatINR(toRupees(booking.totalPaise))}
                   </dd>
                 </div>
+                {showSplit && (
+                  <div className="mt-3 border-t border-navy/10 pt-2.5">
+                    <p className="mb-1.5 text-[0.75rem] font-semibold uppercase tracking-[0.11em] text-navy/45">
+                      How you paid
+                    </p>
+                    {booking.payments.map((p, i) => (
+                      <div key={i} className="mb-1.5 flex items-baseline justify-between gap-3">
+                        <dt className="text-navy/65">
+                          {HOW_PAID[p.method] ?? p.method}
+                          <span className="ml-2 text-[0.78rem] text-navy/40">
+                            {(p.capturedAt ?? p.createdAt).toLocaleDateString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                            })}
+                          </span>
+                        </dt>
+                        <dd className="tabular-nums text-navy">
+                          {formatINR(toRupees(p.amountPaise))}
+                        </dd>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {booking.amountPaidPaise > 0 && (
                   <Line label="You paid" value={formatINR(toRupees(booking.amountPaidPaise))} />
                 )}
@@ -198,9 +299,25 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                 {/* Money already sent back. Absent from this page entirely
                     until now, so a customer who had been refunded ₹2,000 saw
                     only "You paid ₹6,300" and no sign of it. */}
+                {showRefundSplit && (
+                  <div className="mt-3 border-t border-navy/10 pt-2.5">
+                    <p className="mb-1.5 text-[0.75rem] font-semibold uppercase tracking-[0.11em] text-navy/45">
+                      How it was refunded
+                    </p>
+                    {refundsByMethod.map((r) => (
+                      <div key={r.method} className="mb-1.5 flex items-baseline justify-between gap-3">
+                        <dt className="text-navy/65">{HOW_REFUNDED[r.method] ?? r.method}</dt>
+                        <dd className="tabular-nums text-navy">
+                          − {formatINR(toRupees(r.amountPaise))}
+                        </dd>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {booking.refundedPaise > 0 && (
                   <Line
-                    label="Refunded to you"
+                    label={showRefundSplit ? "Refunded in total" : "Refunded to you"}
                     value={`− ${formatINR(toRupees(booking.refundedPaise))}`}
                   />
                 )}

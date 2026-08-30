@@ -99,10 +99,36 @@ export async function getBookingForCustomer(reference: string, profileId: string
           emergencyContactName: true, emergencyContactPhone: true,
         },
       },
-      // Only the fee is needed: the customer's page names the difference
-      // between what it says they paid and what their bank statement shows.
+      /**
+       * Enough to show the customer HOW they paid, not just how much.
+       *
+       * Someone reconciling ₹4,200 against their bank statement finds ₹1,500
+       * there and nothing else, because the other ₹2,700 was cash handed
+       * over at a stall. The total alone cannot explain that.
+       */
       payments: {
-        select: { status: true, convenienceFeePaise: true },
+        where: { status: "CAPTURED" },
+        orderBy: { capturedAt: "asc" },
+        select: {
+          status: true,
+          method: true,
+          amountPaise: true,
+          convenienceFeePaise: true,
+          capturedAt: true,
+          createdAt: true,
+        },
+      },
+      /**
+       * PROCESSED only, to match refundedPaise.
+       *
+       * A PENDING Razorpay refund has not left our account, so listing it
+       * would show the customer money they cannot yet look for — and the
+       * lines would not add up to the total beside them.
+       */
+      refunds: {
+        where: { status: "PROCESSED" },
+        orderBy: { processedAt: "asc" },
+        select: { method: true, amountPaise: true, processedAt: true, createdAt: true },
       },
     },
   });

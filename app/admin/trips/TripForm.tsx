@@ -218,7 +218,7 @@ export function TripForm({
             error={err("totalSeats")}
             hint={mode === "edit" ? `${values.seatsBooked ?? 0} already booked` : undefined}
           >
-            <input type="number" name="totalSeats" min={1} defaultValue={values.totalSeats ?? 12} required className={input} />
+            <input type="number" name="totalSeats" min={1} step={1} defaultValue={values.totalSeats ?? 12} required className={input} />
           </Field>
           <Field label="Minimum participants" hint="Below this, the trip is cancelled" error={err("minParticipants")}>
             <input type="number" name="minParticipants" min={1} defaultValue={values.minParticipants ?? 1} className={input} />
@@ -230,7 +230,7 @@ export function TripForm({
       <Section title="Pricing" subtitle="Everything here drives the payment maths, so it stays as real fields.">
         <Grid>
           <Field label="Price per person (₹)" error={err("price")}>
-            <input type="number" name="price" min={0} value={price} onChange={(e) => setPrice(Number(e.target.value))} required className={input} />
+            <input type="number" name="price" min={0} value={price} onChange={(e) => setPrice(Math.max(0, Number(e.target.value) || 0))} required className={input} />
           </Field>
           <Field label="Was price (₹)" hint="Optional. Struck through — display only, never charged." error={err("comparePrice")}>
             <input type="number" name="comparePrice" min={0} defaultValue={values.comparePrice ?? ""} className={input} />
@@ -239,16 +239,16 @@ export function TripForm({
             <input name="offerLabel" defaultValue={values.offerLabel ?? ""} placeholder="Early bird" className={input} />
           </Field>
           <Field label="GST %">
-            <input type="number" name="gstPercent" min={0} max={100} value={gst} onChange={(e) => setGst(Number(e.target.value))} className={input} />
+            <input type="number" name="gstPercent" min={0} max={100} value={gst} onChange={(e) => setGst(Math.max(0, Number(e.target.value) || 0))} className={input} />
           </Field>
           <Field
             label="TCS %"
             hint="Overseas trips only. Leave 0 for trips inside India."
           >
-            <input type="number" name="tcsPercent" min={0} max={100} value={tcs} onChange={(e) => setTcs(Number(e.target.value))} className={input} />
+            <input type="number" name="tcsPercent" min={0} max={100} value={tcs} onChange={(e) => setTcs(Math.max(0, Number(e.target.value) || 0))} className={input} />
           </Field>
           <Field label="Advance to book (₹)" hint="Blank means pay in full" error={err("advance")}>
-            <input type="number" name="advance" min={0} value={advance || ""} onChange={(e) => setAdvance(Number(e.target.value))} className={input} />
+            <input type="number" name="advance" min={0} value={advance || ""} onChange={(e) => setAdvance(Math.max(0, Number(e.target.value) || 0))} className={input} />
           </Field>
         </Grid>
 

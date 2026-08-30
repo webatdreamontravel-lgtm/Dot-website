@@ -35,7 +35,11 @@ const prisma = new PrismaClient({
 });
 
 /** The only trips this script is allowed to touch. */
-const TEST_SLUGS = ["kotagiri-payment-lab-test", "ooty-balance-lab-test"] as const;
+const TEST_SLUGS = [
+  "kotagiri-payment-lab-test",
+  "ooty-balance-lab-test",
+  "coonoor-test-bench-test",
+] as const;
 
 async function main() {
   const trips = await prisma.trip.findMany({

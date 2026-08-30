@@ -63,6 +63,26 @@ export function customerStatus(booking: {
   const rupees = (p: number) =>
     "₹" + (p / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
+  if (status === "CARRIED_FORWARD") {
+    /**
+     * No money came back, so this must not read like a refund.
+     *
+     * The credit amount is deliberately absent: this page knows what the
+     * booking cost, not what the team decided to carry forward, and those are
+     * different numbers whenever a cancellation charge or a goodwill top-up
+     * was involved. The balance is shown separately, from the ledger, where
+     * it is actually known.
+     */
+    return {
+      label: "Carried forward",
+      tone: NEUTRAL,
+      body:
+        "This booking was cancelled and what you paid is being held as travel credit " +
+        "towards a future trip. It doesn't expire — tell us when you're ready to book " +
+        "and we'll put it towards the cost.",
+    };
+  }
+
   if (status === "PARTIALLY_REFUNDED") {
     /**
      * States the two figures and stops.

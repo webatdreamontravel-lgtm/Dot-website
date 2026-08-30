@@ -10,6 +10,7 @@ import { AlertCircle, Check, IndianRupee, Loader2, Pencil, Trash2, X } from "luc
 // server-only and importing it here drags Prisma and pg into the browser
 // bundle, which fails the build.
 import { toRupees } from "@/lib/booking/pricing";
+import { sanitiseAmountInput } from "@/lib/money";
 import { formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, Panel } from "../../ui";
 import {
@@ -19,6 +20,8 @@ import {
   sendBalanceReminderNow,
   updateBookingDetails,
   updateBookingStatus,
+  carryBookingForward,
+  recordOfflineRefund,
   type ActionResult,
 } from "../actions";
 
@@ -82,6 +85,9 @@ export function PaymentPanel({
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
 
+  const enteredPaise = Math.round((Number(amount) || 0) * 100);
+  const overBalance = enteredPaise > balancePaise;
+
   const submit = () =>
     run(
       () => recordPayment({ bookingId, method: method as "CASH", amountPaise: amount, externalReference: reference, notes }),
@@ -91,6 +97,25 @@ export function PaymentPanel({
         setNotes("");
       },
     );
+
+  /**
+   * A fully-paid booking gets no form.
+   *
+   * Disabling the button would leave the fields sitting there inviting an
+   * amount, and a validation message is a worse answer than never asking the
+   * question. There is nothing owed, so there is nothing to record — and
+   * money genuinely taken beyond the total is a repricing or a mistake, both
+   * of which want a person thinking rather than a quick entry here.
+   */
+  if (balancePaise <= 0) {
+    return (
+      <Panel title="Record a payment">
+        <p className="px-5 py-6 text-center text-[0.86rem] text-[#5a6785]">
+          This booking is paid in full — there&apos;s nothing left to record.
+        </p>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title="Record a payment">
@@ -103,13 +128,17 @@ export function PaymentPanel({
               <IndianRupee className="h-3.5 w-3.5 flex-none text-[#8b96ad]" />
               <input
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => setAmount(sanitiseAmountInput(e.target.value))}
                 inputMode="decimal"
                 placeholder="19999"
                 className="w-full border-0 bg-transparent text-[0.88rem] outline-none"
               />
             </div>
-            {balancePaise > 0 && (
+            {overBalance ? (
+              <p className="mt-1 text-[0.75rem] font-medium text-[#b3261e]">
+                More than the {formatINR(toRupees(balancePaise))} outstanding.
+              </p>
+            ) : (
               <button
                 type="button"
                 onClick={() => setAmount(String(toRupees(balancePaise)))}
@@ -135,7 +164,7 @@ export function PaymentPanel({
         <button
           type="button"
           onClick={submit}
-          disabled={pending || !amount.trim()}
+          disabled={pending || !amount.trim() || overBalance}
           className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
         >
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -166,38 +195,78 @@ const STATUS_EMAIL: Record<string, string> = {
 
 export function StatusPanel({
   bookingId,
+  reference,
   status,
   seatsCounted,
   customerEmail,
+  customerName,
+  amountPaidPaise,
+  refundedPaise,
 }: {
   bookingId: string;
+  reference: string;
   status: string;
   seatsCounted: boolean;
   /** Shown on the confirm step so nobody emails the wrong person. */
   customerEmail: string | null;
+  customerName: string;
+  amountPaidPaise: number;
+  refundedPaise: number;
 }) {
   const { run, pending, error } = useAction();
   const [next, setNext] = useState(status);
   const [reason, setReason] = useState("");
-  /**
-   * The second click.
-   *
-   * Deliberately a step in the panel rather than window.confirm(): a native
-   * dialog can only carry one line of text, and the thing worth reading here
-   * is a list — the seat movement, the email, and who it goes to. It also
-   * resets whenever the chosen status changes, so a confirmation can never
-   * be left over from a status the admin has since changed their mind about.
-   */
   const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  /**
+   * What we are actually holding: paid minus anything already refunded.
+   *
+   * The default credit, and the figure the "more than they paid" warning is
+   * measured against. A booking that took ₹6,300 and sent ₹2,000 back holds
+   * ₹4,300 — offering to carry ₹6,300 forward would invent money we no
+   * longer have.
+   */
+  const heldPaise = Math.max(amountPaidPaise - refundedPaise, 0);
+  const [credit, setCredit] = useState(String(heldPaise / 100));
 
   const cancelling = next === "CANCELLED";
   const changed = next !== status;
-  const willEmail = STATUS_EMAIL[next];
+  /**
+   * Only while it is a CHANGE.
+   *
+   * On a booking already carried forward, `next` starts equal to the current
+   * status — so without `changed` the panel re-opens the credit fields, shows
+   * a held figure that has already been given away, and invites doing it a
+   * second time.
+   */
+  const carrying = next === "CARRIED_FORWARD" && changed;
+  const willEmail = carrying ? "their travel credit" : STATUS_EMAIL[next];
+
+  const creditPaise = Math.round((Number(credit) || 0) * 100);
+  const aboveHeld = creditPaise > heldPaise;
+  const creditValid = creditPaise > 0 && creditPaise >= 0;
+  /**
+   * The charge is the other half of the same number, and either can be typed.
+   *
+   * Only the credit is state — the charge is derived from it, and typing in
+   * the charge box writes back through the same subtraction. Holding both as
+   * state would mean two values that can disagree, and the moment they do,
+   * neither the screen nor the ledger can say which one the admin meant.
+   *
+   * Clamped at zero for display: once the credit goes above what we hold, the
+   * charge is not a negative charge, it is goodwill — which gets its own line
+   * rather than a minus sign in a box labelled "charge".
+   */
+  const chargePaise = Math.max(heldPaise - creditPaise, 0);
+  const chargeInput = String(chargePaise / 100);
+  const canSubmit = changed && (!carrying || creditValid) && !done;
 
   return (
     <Panel title="Status">
       <div className="px-5 py-4">
-        {error && <ErrorNote>{error}</ErrorNote>}
+        {error && error !== "ABOVE_PAID" && <ErrorNote>{error}</ErrorNote>}
+        {done && <p className="mb-2 text-[0.83rem] font-medium text-[#0f7a55]">{done}</p>}
 
         <Field label="Booking status">
           <Select
@@ -219,6 +288,72 @@ export function StatusPanel({
           </div>
         )}
 
+        {/* Carrying forward needs an amount, so the extra fields appear here
+            rather than behind a second button. The status IS the decision;
+            these are its terms. */}
+        {carrying && (
+          <div className="mt-3 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
+            <div className="flex items-baseline justify-between text-[0.83rem]">
+              <span className="text-[#5a6785]">{customerName} has held</span>
+              <span className="font-semibold tabular-nums text-[#16203a]">
+                {formatINR(toRupees(heldPaise))}
+              </span>
+            </div>
+            {refundedPaise > 0 && (
+              <p className="mt-0.5 text-right text-[0.75rem] text-[#8b96ad]">
+                {formatINR(toRupees(amountPaidPaise))} paid ·{" "}
+                {formatINR(toRupees(refundedPaise))} already refunded
+              </p>
+            )}
+
+            {/* Either box can be typed; they always add up to what is held.
+                Whichever one the admin thinks in — "give them ₹4,000" or
+                "keep ₹500" — is the one they can fill. */}
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="Travel credit (₹)">
+                <Input
+                  value={credit}
+                  onChange={(v) => {
+                    setCredit(sanitiseAmountInput(v));
+                    setConfirming(false);
+                  }}
+                  placeholder="0"
+                />
+              </Field>
+              <Field label="Cancellation charge (₹)">
+                <Input
+                  value={chargeInput}
+                  onChange={(v) => {
+                    const typed = Math.round((Number(sanitiseAmountInput(v)) || 0) * 100);
+                    setCredit(String(Math.max(heldPaise - typed, 0) / 100));
+                    setConfirming(false);
+                  }}
+                  placeholder="0"
+                />
+              </Field>
+            </div>
+
+            <p className="mt-1.5 text-[0.75rem] text-[#8b96ad]">
+              The two add up to {formatINR(toRupees(heldPaise))}. Type either one.
+            </p>
+
+            {aboveHeld && (
+              <p className="mt-2 flex justify-between rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] text-[#7a4a00]">
+                <span>Goodwill added — above what we hold</span>
+                <span className="font-semibold tabular-nums">
+                  {formatINR(toRupees(creditPaise - heldPaise))}
+                </span>
+              </p>
+            )}
+
+            <div className="mt-3">
+              <Field label="Note (shown to the customer)">
+                <Input value={reason} onChange={setReason} placeholder="Optional" />
+              </Field>
+            </div>
+          </div>
+        )}
+
         {changed && (
           <p className="mt-3 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] leading-relaxed text-[#7a4a00]">
             {seatsCounted && !["REQUESTED", "CONFIRMED"].includes(next)
@@ -237,7 +372,8 @@ export function StatusPanel({
           >
             {willEmail ? (
               <>
-                <strong>{customerEmail ?? "The customer"}</strong> will be emailed {willEmail}.
+                <strong>{customerEmail ?? "The customer"}</strong> will be emailed{" "}
+                {carrying ? willEmail : `a ${willEmail.replace(/^a /, "")}`}.
               </>
             ) : (
               "No email will be sent — this status is internal bookkeeping."
@@ -249,7 +385,7 @@ export function StatusPanel({
           <button
             type="button"
             onClick={() => setConfirming(true)}
-            disabled={pending || !changed}
+            disabled={pending || !canSubmit}
             className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
           >
             Update status
@@ -257,32 +393,58 @@ export function StatusPanel({
         ) : (
           <div className="mt-4 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
             <p className="text-[0.85rem] leading-relaxed text-[#16203a]">
-              Change status to <strong>{BOOKING_TONE[next]?.label ?? next}</strong>
-              {willEmail ? (
+              {carrying ? (
                 <>
-                  {" "}
-                  and email {customerEmail ?? "the customer"} {willEmail}?
+                  Cancel <strong>{reference}</strong>, release its seats, and give{" "}
+                  {customerName} <strong>{formatINR(toRupees(creditPaise))}</strong> of travel
+                  credit?
                 </>
               ) : (
-                "?"
+                <>
+                  Change status to <strong>{BOOKING_TONE[next]?.label ?? next}</strong>
+                  {willEmail ? <> and email {customerEmail ?? "the customer"} {willEmail}?</> : "?"}
+                </>
               )}
             </p>
-            {willEmail && (
-              <p className="mt-1 text-[0.78rem] text-[#8b96ad]">
-                This can&apos;t be unsent.
+
+            {carrying && aboveHeld && (
+              <p className="mt-1.5 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] leading-relaxed text-[#7a4a00]">
+                That is {formatINR(toRupees(creditPaise - heldPaise))} more than{" "}
+                {customerName} has with us.
               </p>
             )}
+            {carrying && <p className="mt-1.5 text-[0.78rem] text-[#8b96ad]">No money is refunded.</p>}
+            {!carrying && willEmail && (
+              <p className="mt-1 text-[0.78rem] text-[#8b96ad]">This can&apos;t be unsent.</p>
+            )}
+
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() =>
                   run(async () => {
-                    const res = await updateBookingStatus({
-                      bookingId,
-                      status: next as "CONFIRMED",
-                      reason,
-                    });
-                    if (res.ok) setConfirming(false);
+                    // Carrying forward has its own action: it needs an
+                    // amount, writes to the credit ledger and sends a
+                    // different email.
+                    const res = carrying
+                      ? await carryBookingForward({
+                          reference,
+                          creditRupees: Number(credit),
+                          note: reason,
+                          confirmedAbovePaid: true,
+                        })
+                      : await updateBookingStatus({
+                          bookingId,
+                          status: next as "CONFIRMED",
+                          reason,
+                        });
+                    if (res.ok) {
+                      setConfirming(false);
+                      if (carrying) {
+                        const info = "info" in res ? res.info : undefined;
+                        setDone(typeof info === "string" ? info : "Carried forward.");
+                      }
+                    }
                     return res;
                   })
                 }
@@ -290,7 +452,7 @@ export function StatusPanel({
                 className="inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
               >
                 {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {willEmail ? "Update & send email" : "Update status"}
+                {carrying ? "Carry forward" : willEmail ? "Update & send email" : "Update status"}
               </button>
               <button
                 type="button"
@@ -545,11 +707,22 @@ export function RefundPanel({
   pendingPaise,
   refundedPaise,
   owedPaise,
+  gatewayPaidPaise,
+  creditPaidPaise,
   hasOnlinePayment,
 }: {
   reference: string;
-  /** The CEILING — every rupee still sitting with us on this booking. */
+  /** The CEILING — what Razorpay still holds and could send back. */
   refundablePaise: number;
+  /** What actually reached Razorpay. */
+  gatewayPaidPaise: number;
+  /**
+   * Paid with travel credit. Razorpay never saw it, so it cannot be refunded
+   * — it goes back by carrying the booking forward instead. Named here so the
+   * gap between "paid ₹2,100" and "can refund ₹1,100" is explained rather
+   * than looking like a bug.
+   */
+  creditPaidPaise: number;
   pendingPaise: number;
   refundedPaise: number;
   /**
@@ -603,11 +776,33 @@ export function RefundPanel({
             <dd className="font-medium tabular-nums text-[#8b6a00]">{formatINR(toRupees(pendingPaise))}</dd>
           </div>
         )}
+        <div className="flex justify-between">
+          <dt className="text-[#5a6785]">Paid through Razorpay</dt>
+          <dd className="font-medium tabular-nums text-[#16203a]">
+            {formatINR(toRupees(gatewayPaidPaise))}
+          </dd>
+        </div>
+        {creditPaidPaise > 0 && (
+          <div className="flex justify-between">
+            <dt className="text-[#8b96ad]">Paid with travel credit</dt>
+            <dd className="tabular-nums text-[#8b96ad]">
+              {formatINR(toRupees(creditPaidPaise))}
+            </dd>
+          </div>
+        )}
         <div className="flex justify-between border-t border-[#eef1f6] pt-1">
           <dt className="text-[#5a6785]">Can refund (max)</dt>
           <dd className="font-semibold tabular-nums text-[#16203a]">{formatINR(toRupees(refundablePaise))}</dd>
         </div>
-        {owedPaise > 0 && (
+        {creditPaidPaise > 0 && (
+        <p className="mt-2 rounded-lg bg-[#f2f4f7] px-3 py-2 text-[0.8rem] leading-relaxed text-[#5a6785]">
+          {formatINR(toRupees(creditPaidPaise))} of this booking was paid with travel credit.
+          Razorpay never received it, so it can&apos;t be sent back — carry the booking forward
+          to return it as credit instead.
+        </p>
+      )}
+
+      {owedPaise > 0 && (
           <div className="flex justify-between">
             <dt className="font-medium text-[#b26a00]">Owed to the customer</dt>
             <dd className="font-semibold tabular-nums text-[#b26a00]">
@@ -637,7 +832,7 @@ export function RefundPanel({
               min={1}
               max={maxRupees}
               value={amount}
-              onChange={(v) => { setAmount(v); setConfirming(false); }}
+              onChange={(v) => { setAmount(sanitiseAmountInput(v)); setConfirming(false); }}
               placeholder={String(Math.floor(maxRupees))}
             />
           </Field>
@@ -837,5 +1032,170 @@ function ErrorNote({ children }: { children: React.ReactNode }) {
       <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-none text-[#c33a3a]" />
       {children}
     </p>
+  );
+}
+
+
+const RETURN_METHODS = [
+  { value: "CASH", label: "Cash" },
+  { value: "UPI", label: "UPI / GPay" },
+  { value: "BANK_TRANSFER", label: "Bank transfer" },
+  { value: "OTHER", label: "Other" },
+];
+
+/**
+ * Money the team gave back themselves.
+ *
+ * Deliberately a separate panel from the Razorpay one rather than a method
+ * dropdown inside it, because almost nothing about the two is shared. A
+ * gateway refund is a request that may sit pending for days and can fail;
+ * this is a record of something that has already happened and cannot. The
+ * ceilings differ too — Razorpay can only send back what it received, while
+ * cash can be handed over regardless of how the money arrived.
+ *
+ * Folding them together would mean a form whose every field, limit and
+ * outcome changed on one dropdown.
+ */
+export function OfflineRefundPanel({
+  reference,
+  heldPaise,
+}: {
+  reference: string;
+  /** Everything still with us: paid, less refunds, less credit carried forward. */
+  heldPaise: number;
+}) {
+  const { run, pending, error } = useAction();
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("CASH");
+  const [ref, setRef] = useState("");
+  const [reason, setReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  /**
+   * A note above the form, not instead of it.
+   *
+   * It used to replace the whole panel, so returning ₹1,000 of ₹1,990 left no
+   * way to give back the rest without reloading — on a screen whose entire
+   * job is handing money back in pieces.
+   */
+  const [done, setDone] = useState<string | null>(null);
+
+  if (heldPaise <= 0) return null;
+
+  const enteredPaise = Math.round((Number(amount) || 0) * 100);
+  const overHeld = enteredPaise > heldPaise;
+  const valid = enteredPaise > 0 && !overHeld;
+
+  return (
+    <section className="rounded-[14px] border border-[#e3e7ee] bg-white p-5 shadow-sm">
+      <h2 className="text-[0.95rem] font-semibold text-[#16203a]">Returned by hand</h2>
+      <p className="mt-1.5 text-[0.83rem] leading-relaxed text-[#5a6785]">
+        Money you gave back yourself — cash, GPay, a bank transfer. Recorded as returned
+        straight away; nothing is sent through Razorpay.
+      </p>
+
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {done && <p className="mt-2 text-[0.83rem] font-medium text-[#0f7a55]">{done}</p>}
+
+      <>
+          <div className="mt-3 flex justify-between text-[0.83rem]">
+            <span className="text-[#5a6785]">Still held on this booking</span>
+            <span className="font-semibold tabular-nums text-[#16203a]">
+              {formatINR(toRupees(heldPaise))}
+            </span>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="Amount (₹)">
+              <Input
+                value={amount}
+                onChange={(v) => {
+                  setAmount(sanitiseAmountInput(v));
+                  setConfirming(false);
+                }}
+                placeholder="0"
+              />
+            </Field>
+            <Field label="How you returned it">
+              <Select value={method} onChange={setMethod} options={RETURN_METHODS} />
+            </Field>
+          </div>
+
+          {overHeld && (
+            <p className="mt-1.5 text-[0.8rem] font-medium text-[#b3261e]">
+              More than the {formatINR(toRupees(heldPaise))} still held.
+            </p>
+          )}
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="Reference / UTR">
+              <Input value={ref} onChange={setRef} placeholder="Optional" />
+            </Field>
+            <Field label="Reason (shown to the customer)">
+              <Input value={reason} onChange={setReason} placeholder="Optional" />
+            </Field>
+          </div>
+
+          {!confirming ? (
+            <button
+              type="button"
+              disabled={pending || !valid}
+              onClick={() => setConfirming(true)}
+              className="mt-4 w-full rounded-lg border border-[#e3e7ee] bg-[#f6f7f9] px-3.5 py-2 text-[0.85rem] font-medium text-[#16203a] hover:bg-[#eef1f6] disabled:opacity-50"
+            >
+              Record refund
+            </button>
+          ) : (
+            <div className="mt-4 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
+              <p className="text-[0.85rem] leading-relaxed text-[#16203a]">
+                Record <strong>{formatINR(toRupees(enteredPaise))}</strong> returned by{" "}
+                {RETURN_METHODS.find((m) => m.value === method)?.label.toLowerCase()}?
+              </p>
+              <p className="mt-1 text-[0.78rem] text-[#8b96ad]">
+                The customer will be emailed. This assumes you have already given them the money.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() =>
+                    run(async () => {
+                      const res = await recordOfflineRefund({
+                        reference,
+                        amountRupees: Number(amount),
+                        method: method as "CASH",
+                        externalReference: ref,
+                        reason,
+                      });
+                      if (res.ok) {
+                        setConfirming(false);
+                        const info = "info" in res ? res.info : undefined;
+                        setDone(typeof info === "string" ? info : "Recorded.");
+                        // Cleared so the next amount starts from nothing
+                        // rather than the one just recorded.
+                        setAmount("");
+                        setRef("");
+                        setReason("");
+                      }
+                      return res;
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
+                >
+                  {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Yes, record it
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => setConfirming(false)}
+                  className="rounded-lg border border-[#e3e7ee] px-3.5 py-2 text-[0.85rem] font-medium text-[#5a6785] hover:bg-[#f6f7f9] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+      </>
+    </section>
   );
 }
