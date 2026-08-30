@@ -1,23 +1,27 @@
 import { NextResponse } from "next/server";
 
 import { getSessionProfile } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  formatMb,
+  MAX_STORED_BYTES,
+  MAX_STORED_MB,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_MB,
+} from "@/lib/imageConfig";
+import { buildKey, publicUrlFor, putImage } from "@/lib/s3";
 
-const BUCKET = "trip-media";
-/** Must stay in step with MAX_UPLOAD_MB in lib/uploadImage.ts. */
-const MAX_BYTES = 10 * 1024 * 1024;
 /** What a person is allowed to pick. */
 const ALLOWED_INPUT = new Set(["image/jpeg", "image/png"]);
 /** What may land in storage — WebP because we convert before uploading. */
 const ALLOWED_STORED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 /**
- * Uploads a trip photo.
+ * Uploads a trip photo to S3.
  *
- * The service-role key can write anywhere in storage, so this route is the
- * only place it's used for uploads and the admin check comes first. Note
- * this returns a JSON error rather than redirecting — requireAdmin()'s
- * redirect would surface to fetch() as an opaque HTML response.
+ * These credentials can write and delete, so this route is the only place
+ * they're used for uploads and the admin check comes first. Note this returns
+ * a JSON error rather than redirecting — requireAdmin()'s redirect would
+ * surface to fetch() as an opaque HTML response.
  */
 export async function POST(request: Request) {
   const profile = await getSessionProfile();
@@ -37,9 +41,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No file was attached." }, { status: 400 });
   }
 
-  // Two checks, because the browser converts to WebP before uploading and
-  // the server would otherwise have no idea what was actually picked.
-  // Client-side validation is a convenience; this is the enforcement.
   const originalType = String(form.get("originalType") ?? "");
   if (originalType && !ALLOWED_INPUT.has(originalType)) {
     return NextResponse.json(
@@ -56,9 +57,18 @@ export async function POST(request: Request) {
     );
   }
 
-  if (file.size > MAX_BYTES) {
+  if (file.size > MAX_UPLOAD_BYTES) {
     return NextResponse.json(
-      { error: `That image is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is 10 MB.` },
+      { error: `That image is ${formatMb(file.size)}. The limit is ${MAX_UPLOAD_MB} MB.` },
+      { status: 413 },
+    );
+  }
+
+  if (file.size > MAX_STORED_BYTES) {
+    return NextResponse.json(
+      {
+        error: `That image is ${formatMb(file.size)} after compression. The limit is ${MAX_STORED_MB} MB.`,
+      },
       { status: 413 },
     );
   }
@@ -68,21 +78,16 @@ export async function POST(request: Request) {
     : file.type === "image/webp" ? "webp"
     : "jpg";
 
-  // Random path per upload: replacing a photo never overwrites the old
-  // object, so a cached CDN copy can't serve the wrong image, and the
-  // previous version stays recoverable.
-  const path = `trips/${slot}-${crypto.randomUUID()}.${ext}`;
+  const key = buildKey(slot, ext);
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.storage
-    .from(BUCKET)
-    .upload(path, file, { contentType: file.type, upsert: false, cacheControl: "31536000" });
-
-  if (error) {
-    return NextResponse.json({ error: `Upload failed: ${error.message}` }, { status: 500 });
+  try {
+    await putImage(key, new Uint8Array(await file.arrayBuffer()), file.type);
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Upload failed: ${(e as Error).message}` },
+      { status: 500 },
+    );
   }
 
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-
-  return NextResponse.json({ url: data.publicUrl, path });
+  return NextResponse.json({ url: publicUrlFor(key), key });
 }

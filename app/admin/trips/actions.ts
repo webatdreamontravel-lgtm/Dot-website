@@ -7,9 +7,59 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseReviews, replaceReviews } from "@/lib/reviewsPayload";
+import { deleteImages, keyFromUrl } from "@/lib/s3";
+import { collectImageUrls, orphanedUrls, type TripImageFields } from "@/lib/tripImages";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
 export type TripFormState = { error?: string; fieldErrors?: Record<string, string> };
+
+/**
+ * Every column that can hold an uploaded image URL. Selected before an update
+ * so the save can work out what it orphaned.
+ */
+const IMAGE_FIELD_SELECT = {
+  cardImage: true,
+  heroImage: true,
+  itinerary: true,
+  introduction: true,
+  inclusions: true,
+  exclusions: true,
+  thingsToKnow: true,
+  cancellationPolicy: true,
+} as const;
+
+/**
+ * Deletes stored images the save just orphaned — a replaced photo, one cleared
+ * with Remove, a deleted itinerary day, an image taken out of a rich-text
+ * field.
+ *
+ * Deliberately runs AFTER a successful write, comparing the row as it was
+ * against the row as it now is. Deleting when the admin picks a new photo
+ * would destroy the original for someone who then abandons the form.
+ *
+ * `keyFromUrl` returns null for anything not in our bucket, which is what
+ * keeps Unsplash seed URLs and the legacy Supabase Storage images safe.
+ *
+ * Never throws: the trip is already saved, and failing the action over a
+ * leftover object would report a successful save as an error.
+ */
+async function cleanUpOrphanedImages(
+  before: TripImageFields,
+  after: TripImageFields,
+): Promise<void> {
+  try {
+    const removed = orphanedUrls(collectImageUrls(before), collectImageUrls(after));
+    const keys = removed.map(keyFromUrl).filter((k): k is string => k !== null);
+    if (keys.length === 0) return;
+
+    const failed = await deleteImages(keys);
+    if (failed.length > 0) {
+      console.error("[trip images] could not delete orphaned objects:", failed);
+    }
+  } catch (e) {
+    console.error("[trip images] cleanup failed:", e);
+  }
+}
 
 /** Rupees in the form, paise in the database. Never store a float. */
 const rupeesToPaise = (v: unknown) => Math.round(Number(v || 0) * 100);
@@ -294,7 +344,7 @@ export async function updateTrip(
 
   const existing = await prisma.trip.findUnique({
     where: { id },
-    select: { seatsBooked: true, slug: true },
+    select: { seatsBooked: true, slug: true, ...IMAGE_FIELD_SELECT },
   });
   if (!existing) return { error: "That trip no longer exists." };
 
@@ -312,14 +362,18 @@ export async function updateTrip(
   // link already shared on WhatsApp.
   const slug = existing.slug;
 
+  const data = buildData(d);
+
   try {
     await prisma.trip.update({
-      data: { slug, totalSeats: d.totalSeats, ...buildData(d) },
+      data: { slug, totalSeats: d.totalSeats, ...data },
       where: { id },
     });
   } catch (e) {
     return { error: `Couldn't save the trip: ${(e as Error).message}` };
   }
+
+  await cleanUpOrphanedImages(existing, { ...existing, ...data });
 
   const reviews = parseReviews(formData.get("reviews"));
   if (reviews) await replaceReviews(id, reviews);
