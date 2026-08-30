@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { AlertCircle, ImagePlus, Loader2, Trash2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -44,6 +44,18 @@ export function ImageUpload({
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
+  const [preview, setPreview] = useState<string | null>(null);
+
+  // Object URLs pin the file in memory until revoked.
+  const revokePreview = useRef<(() => void) | null>(null);
+  useEffect(() => () => revokePreview.current?.(), []);
+
+  function clearPreview() {
+    revokePreview.current?.();
+    revokePreview.current = null;
+    setPreview(null);
+  }
+
   async function handleFile(file: File) {
     setError(null);
 
@@ -59,6 +71,14 @@ export function ImageUpload({
       return;
     }
 
+    // Show the photo immediately. Compression alone can take a moment, and
+    // the upload longer, so waiting for S3 to answer before showing anything
+    // reads as though the pick didn't register.
+    clearPreview();
+    const objectUrl = URL.createObjectURL(file);
+    revokePreview.current = () => URL.revokeObjectURL(objectUrl);
+    setPreview(objectUrl);
+
     setBusy(true);
     const result = await uploadImage(file, slot);
     setBusy(false);
@@ -66,12 +86,29 @@ export function ImageUpload({
     if (fileRef.current) fileRef.current.value = "";
 
     if ("error" in result) {
+      clearPreview();
       setError(result.error);
       return;
     }
+
     setUrl(result.url);
     onChange?.(result.url);
+
+    // Hold the local preview until the remote image has actually decoded,
+    // otherwise swapping straight to the S3 URL flashes empty while it loads
+    // — and if the object isn't publicly readable, the blank frame is the
+    // only symptom you'd ever see.
+    const img = new Image();
+    img.onload = clearPreview;
+    img.onerror = () => {
+      clearPreview();
+      setError("Uploaded, but the image can't be loaded back — check the bucket's public-read policy.");
+    };
+    img.src = result.url;
   }
+
+  // The local file while it uploads, then the stored URL.
+  const shown = preview ?? url;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -93,12 +130,12 @@ export function ImageUpload({
         )}
         style={{ aspectRatio: aspect }}
       >
-        {url ? (
+        {shown ? (
           <>
             {/* Deliberately a plain <img>: the URL is user-supplied at
                 runtime and next/image would need known dimensions. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt={label ?? "Uploaded photo"} className="h-full w-full object-cover" />
+            <img src={shown} alt={label ?? "Uploaded photo"} className="h-full w-full object-cover" />
             <div className="absolute inset-x-0 bottom-0 flex gap-2 bg-gradient-to-t from-black/70 to-transparent p-2.5">
               <button
                 type="button"
@@ -110,7 +147,7 @@ export function ImageUpload({
               </button>
               <button
                 type="button"
-                onClick={() => { setUrl(""); setError(null); onChange?.(""); }}
+                onClick={() => { clearPreview(); setUrl(""); setError(null); onChange?.(""); }}
                 className="inline-flex items-center gap-1 rounded-lg bg-white/95 px-2.5 py-1.5 text-[0.76rem] font-medium text-[#c33a3a] hover:bg-white"
               >
                 <Trash2 className="h-3 w-3" /> Remove
@@ -147,7 +184,7 @@ export function ImageUpload({
           </button>
         )}
 
-        {busy && url && (
+        {busy && shown && (
           <div className="absolute inset-0 grid place-items-center bg-white/70">
             <Loader2 className="h-5 w-5 animate-spin text-teal" />
           </div>
