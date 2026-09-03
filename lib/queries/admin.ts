@@ -3,6 +3,7 @@ import "server-only";
 import { endOfDay, parseDateFilter } from "@/lib/dates";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { statusSettled } from "@/lib/booking/lifecycle";
 
 /**
  * Admin read models.
@@ -496,7 +497,7 @@ function withPaymentState<
    * ₹4,200 trip would otherwise report a ₹4,000 balance — money nobody owes
    * on a trip nobody is going on.
    */
-  const settled = !["PENDING_PAYMENT", "REQUESTED", "CONFIRMED"].includes(b.status);
+  const settled = statusSettled(b.status);
   const balance = settled ? 0 : Math.max(b.totalPaise - netHeld, 0);
   const overpaid = settled ? 0 : Math.max(netHeld - b.totalPaise, 0);
   return {
@@ -815,6 +816,129 @@ export async function getCustomerCities() {
     select: { city: true },
   });
   return rows.map((r) => r.city!).filter(Boolean);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Travel credit — the list screen
+   ──────────────────────────────────────────────────────────────────────── */
+
+export type CreditFilters = {
+  q?: string;
+  /** "" (default) holding credit · "spent" fully used · "all" everyone. */
+  balance?: string;
+  page?: string;
+};
+
+export type CreditHolderRow = {
+  id: string;
+  fullName: string | null;
+  email: string;
+  phone: string | null;
+  /** SUM of every entry: what is left to spend. */
+  balancePaise: number;
+  /** The positive entries — credit that was ever given. */
+  addedPaise: number;
+  /** The negative ones, as a positive number. */
+  usedPaise: number;
+  entries: number;
+  lastAt: Date;
+};
+
+/**
+ * A balance is a SUM over the ledger, so the list has to be built from the
+ * grouped entries and joined back to the customer — not the other way round.
+ * That rules out Prisma's groupBy (it cannot reach profile columns to search
+ * or sort by them), which is why this is raw SQL.
+ *
+ * The CTE is shared by the count and the page so the two can never disagree
+ * about what matches.
+ */
+function creditWhere(filters: CreditFilters) {
+  const q = filters.q?.trim();
+
+  const balance =
+    filters.balance === "spent"
+      ? Prisma.sql`l.balance <= 0`
+      : filters.balance === "all"
+        ? Prisma.sql`TRUE`
+        : Prisma.sql`l.balance > 0`;
+
+  const search = q
+    ? Prisma.sql`AND (
+        p.full_name ILIKE ${`%${q}%`} OR
+        p.email     ILIKE ${`%${q}%`} OR
+        p.phone     ILIKE ${`%${q}%`}
+      )`
+    : Prisma.empty;
+
+  return Prisma.sql`WHERE ${balance} ${search}`;
+}
+
+const CREDIT_LEDGER = Prisma.sql`
+  WITH ledger AS (
+    SELECT profile_id,
+           SUM(amount_paise)::int                AS balance,
+           SUM(GREATEST(amount_paise, 0))::int   AS added,
+           SUM(GREATEST(-amount_paise, 0))::int  AS used,
+           COUNT(*)::int                         AS entries,
+           MAX(created_at)                       AS last_at
+    FROM credit_entries
+    GROUP BY profile_id
+  )`;
+
+export async function getCreditHolders(
+  filters: CreditFilters = {},
+  perPage = PER_PAGE,
+): Promise<Paged<CreditHolderRow>> {
+  const where = creditWhere(filters);
+
+  const [{ n: total }] = await prisma.$queryRaw<{ n: number }[]>`
+    ${CREDIT_LEDGER}
+    SELECT COUNT(*)::int AS n
+    FROM ledger l JOIN profiles p ON p.id = l.profile_id
+    ${where}`;
+
+  const { page, pageCount, skip } = resolvePage(filters.page, total, perPage);
+
+  const rows = await prisma.$queryRaw<CreditHolderRow[]>`
+    ${CREDIT_LEDGER}
+    SELECT p.id,
+           p.full_name AS "fullName",
+           p.email,
+           p.phone,
+           l.balance   AS "balancePaise",
+           l.added     AS "addedPaise",
+           l.used      AS "usedPaise",
+           l.entries,
+           l.last_at   AS "lastAt"
+    FROM ledger l JOIN profiles p ON p.id = l.profile_id
+    ${where}
+    -- balance alone is not a total order; two customers holding the same
+    -- amount could swap between pages and one would never be shown.
+    ORDER BY l.balance DESC, l.last_at DESC, p.id
+    LIMIT ${perPage} OFFSET ${skip}`;
+
+  return { rows, total, page, perPage, pageCount };
+}
+
+/**
+ * The three numbers above the table.
+ *
+ * Deliberately NOT filter-scoped: "outstanding" is a liability on the whole
+ * business, and having it drop because someone typed a name in the search
+ * box would make the one number that matters here untrustworthy.
+ */
+export async function getCreditTotals() {
+  const [row] = await prisma.$queryRaw<
+    { holders: number; outstanding: number; entries: number }[]
+  >`
+    ${CREDIT_LEDGER}
+    SELECT COUNT(*) FILTER (WHERE balance > 0)::int                    AS holders,
+           COALESCE(SUM(balance) FILTER (WHERE balance > 0), 0)::int   AS outstanding,
+           COALESCE(SUM(entries), 0)::int                              AS entries
+    FROM ledger`;
+
+  return row ?? { holders: 0, outstanding: 0, entries: 0 };
 }
 
 /** One customer's profile, without their bookings. */

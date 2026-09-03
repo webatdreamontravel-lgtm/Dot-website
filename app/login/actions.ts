@@ -7,7 +7,6 @@ import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
 
 export type LoginState = {
-  step: "password" | "email" | "otp";
   email: string;
   error?: string;
   message?: string;
@@ -49,7 +48,7 @@ export async function signInWithPassword(
   const password = String(formData.get("password") ?? "");
 
   if (!EMAIL_RE.test(email) || !password) {
-    return { step: "password", email, error: "Enter your email and password." };
+    return { email, error: "Enter your email and password." };
   }
 
   const supabase = await createClient();
@@ -58,60 +57,11 @@ export async function signInWithPassword(
   if (error) {
     // Deliberately vague: saying "no such user" would let anyone enumerate
     // which email addresses have accounts.
-    return { step: "password", email, error: "Email or password is incorrect." };
+    return { email, error: "Email or password is incorrect." };
   }
 
   const redirectTo = await landingFor(data.user.id, String(formData.get("next") ?? "") || null);
-  return { step: "password", email, message: "ok", redirectTo };
-}
-
-/** Sends a one-time code, for customers who have no password. */
-export async function sendOtp(
-  _prev: LoginState,
-  formData: FormData,
-): Promise<LoginState> {
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-
-  if (!EMAIL_RE.test(email)) {
-    return { step: "email", email, error: "That doesn't look like an email address." };
-  }
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { shouldCreateUser: true },
-  });
-
-  if (error) {
-    return { step: "email", email, error: error.message };
-  }
-
-  return { step: "otp", email, message: `We sent a verification code to ${email}.` };
-}
-
-export async function verifyOtp(
-  _prev: LoginState,
-  formData: FormData,
-): Promise<LoginState> {
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const token = String(formData.get("token") ?? "").replace(/\D/g, "");
-
-  // Supabase's OTP length is a project setting (6 by default, but this
-  // project issues 8). Don't hard-code it — validate a sane range instead,
-  // or a correct code gets rejected before it ever reaches Supabase.
-  if (token.length < 6 || token.length > 10) {
-    return { step: "otp", email, error: "Enter the code from your email." };
-  }
-
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
-
-  if (error || !data.user) {
-    return { step: "otp", email, error: "That code isn't right, or it expired. Try again." };
-  }
-
-  const redirectTo = await landingFor(data.user.id, String(formData.get("next") ?? "") || null);
-  return { step: "otp", email, message: "ok", redirectTo };
+  return { email, message: "ok", redirectTo };
 }
 
 export async function signOut() {

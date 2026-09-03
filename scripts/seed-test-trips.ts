@@ -76,6 +76,8 @@ type Seed = {
   durationLabel: string;
   totalSeats: number;
   pricePaise: number;
+  /** Defaults to 5. Zero for trips whose totals must be exact. */
+  gstPercent?: number;
   advancePaise: number;
   heroImage: string;
   cardImage: string;
@@ -227,6 +229,71 @@ const TRIPS: Seed[] = [
       { label: "Adventure", value: 1 },
     ],
   },
+  {
+    slug: "valparai-full-run-test",
+    title: "Valparai Full Run (TEST)",
+    batchName: "TEST · ₹60,000 a seat · advance ₹30,000",
+    tagline: "Round numbers and a big gap between advance and balance, for walking every path end to end",
+    destination: "Valparai, Anamalai Hills",
+    category: "TEST",
+    // 45 days: clear of both one-off reminder offsets (21 and 14) and of the
+    // final-five daily window, so the nightly cron never touches it. Age the
+    // trip deliberately when you want to test reminders.
+    startsInDays: 45,
+    nights: 2,
+    durationLabel: "3 Days, 2 Nights",
+    // Ten seats: three bookings of three still leaves one, so sold-out is
+    // reachable on purpose rather than by running out by accident.
+    totalSeats: 10,
+    /**
+     * ₹60,000 a seat flat, and 0% GST — deliberately.
+     *
+     * ₹60,000 including 5% GST would need a base of ₹57,142.857, which does
+     * not exist. The nearest base, ₹57,143, gives exactly ₹60,000 for one,
+     * two and three seats and then drifts: four seats comes to ₹2,40,001,
+     * ten to ₹6,00,002, because GST is rounded to whole rupees once over the
+     * whole subtotal. A stray rupee on a test trip is worse than useless —
+     * it reads as a bug and costs an hour.
+     *
+     * So this trip carries no tax and every figure is a round multiple of
+     * ₹60,000 at any party size. GST rounding is already covered by the
+     * three trips above, which all run at 5%.
+     */
+    pricePaise: 6_000_000,
+    gstPercent: 0,
+    // Half the total, which makes the split obvious at a glance: ₹30,000
+    // now, ₹30,000 before departure.
+    advancePaise: 3_000_000,
+    heroImage: img("photo-1506905925346-21bda4d32df4", 1920),
+    cardImage: img("photo-1464822759023-fed622ff2c3b", 1200),
+    intro: [
+      "A test departure priced for arithmetic you can do in your head. ₹60,000 a seat, ₹30,000 due now and ₹30,000 before departure — an even split, so a half-paid booking is unmistakable in every table it appears in.",
+      "Ten seats and a six-week runway: room to run the same flow repeatedly, reach sold-out when you want to, and never have a reminder cron change the state underneath you.",
+    ],
+    itinerary: [
+      { title: "Advance, balance, and everything after", body: "The gap between ₹30,000 and ₹60,000 is wide enough that a partial refund, a carried-forward credit and an outstanding balance are three visibly different numbers rather than three near-identical ones." },
+    ],
+    inclusions: [
+      h("What this trip is for"),
+      ul([
+        "Advance now, balance later — both online and recorded by hand",
+        "Refunds: full, partial, by Razorpay and by hand",
+        "Travel credit issued, then spent on a later booking",
+        "Status changes, and the ones that are now refused",
+      ]),
+    ],
+    exclusions: ["An actual trip to Valparai"],
+    thingsToKnow: [
+      "₹60,000 per seat, no tax on this one. Advance ₹30,000 per seat, balance ₹30,000.",
+      "Ten seats. Every party size lands on a whole multiple of ₹60,000.",
+      "Departs in about six weeks — clear of the 21-day, 14-day and final-five reminder windows.",
+    ],
+    moodboard: [
+      { label: "Leisure", value: 1 },
+      { label: "Nature", value: 1 },
+      { label: "Adventure", value: 1 },
+    ],
+  },
 ];
 
 async function main() {
@@ -254,7 +321,9 @@ async function main() {
       minParticipants: 1,
 
       pricePaise: s.pricePaise,
-      gstPercent: 5,
+      // Per-trip, because one of these is deliberately untaxed so its totals
+      // are exact at every party size. See Valparai.
+      gstPercent: s.gstPercent ?? 5,
       tcsPercent: 0,
       advancePaise: s.advancePaise,
       // 0 = no instalment plan of its own. createPaymentOrder writes the
@@ -300,11 +369,13 @@ async function main() {
     });
 
     const r = (paise: number) => "₹" + (paise / 100).toLocaleString("en-IN");
-    const total = trip.pricePaise + Math.round((trip.pricePaise * 5) / 100);
+    // Same rounding computePricing uses, or the line disagrees with the site.
+    const gst = Math.round((trip.pricePaise * (s.gstPercent ?? 5)) / 100 / 100) * 100;
+    const total = trip.pricePaise + gst;
     const days = Math.round((trip.startDate.getTime() - dayFromNow(0).getTime()) / 86_400_000);
 
     console.log(
-      `✓ ${trip.slug.padEnd(26)} ${r(trip.pricePaise)} + 5% = ${r(total)}/seat` +
+      `✓ ${trip.slug.padEnd(26)} ${r(trip.pricePaise)} + ${s.gstPercent ?? 5}% = ${r(total)}/seat` +
         `  advance ${r(trip.advancePaise ?? 0)}  balance ${r(total - (trip.advancePaise ?? 0))}` +
         `\n  ${" ".repeat(26)} ${trip.seatsBooked}/${trip.totalSeats} seats booked` +
         `  ·  departs in ${days} day${days === 1 ? "" : "s"} (${trip.startDate.toISOString().slice(0, 10)})`,

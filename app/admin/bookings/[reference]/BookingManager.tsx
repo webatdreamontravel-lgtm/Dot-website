@@ -10,6 +10,7 @@ import { AlertCircle, Check, IndianRupee, Loader2, Pencil, Trash2, X } from "luc
 // server-only and importing it here drags Prisma and pg into the browser
 // bundle, which fails the build.
 import { toRupees } from "@/lib/booking/pricing";
+import { statusOpen } from "@/lib/booking/lifecycle";
 import { sanitiseAmountInput } from "@/lib/money";
 import { formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, Panel } from "../../ui";
@@ -75,9 +76,14 @@ function useAction() {
 export function PaymentPanel({
   bookingId,
   balancePaise,
+  customerName,
+  creditPaise = 0,
 }: {
   bookingId: string;
   balancePaise: number;
+  customerName: string;
+  /** What this customer is holding in travel credit, across all bookings. */
+  creditPaise?: number;
 }) {
   const { run, pending, error } = useAction();
   const [amount, setAmount] = useState("");
@@ -88,6 +94,46 @@ export function PaymentPanel({
   const enteredPaise = Math.round((Number(amount) || 0) * 100);
   const overBalance = enteredPaise > balancePaise;
 
+  /**
+   * Travel credit is a payment METHOD here, exactly as it is on the new
+   * booking form — "how did they pay? with their credit" is the same
+   * sentence as "with cash" and belongs in the same control, not in a second
+   * amount box the admin has to reconcile by hand.
+   */
+  const payingByCredit = method === "CREDIT";
+  const overCredit = payingByCredit && enteredPaise > creditPaise;
+  /**
+   * Never offer more credit than this booking is short.
+   *
+   * Applying a ₹15,000 balance to a ₹4,200 trip doesn't buy anything — it
+   * creates an overpayment we then owe back in cash, turning credit they
+   * could have spent on a future trip into a refund we have to make now.
+   * Whatever is left simply stays in the ledger.
+   */
+  const applicablePaise = Math.min(creditPaise, balancePaise);
+  const creditCovers = creditPaise > balancePaise;
+
+  /**
+   * Offered only when there is credit to spend — an option that always
+   * errors is worse than one that isn't there. Slotted in above "Other", the
+   * same position it holds on the new booking form, so it reads as one more
+   * way money can arrive rather than an afterthought.
+   */
+  const methodOptions =
+    creditPaise > 0
+      ? METHODS.flatMap((m) =>
+          m.value === "OTHER"
+            ? [
+                {
+                  value: "CREDIT",
+                  label: `Travel credit — ${formatINR(toRupees(creditPaise))} available`,
+                },
+                m,
+              ]
+            : [m],
+        )
+      : METHODS;
+
   const submit = () =>
     run(
       () => recordPayment({ bookingId, method: method as "CASH", amountPaise: amount, externalReference: reference, notes }),
@@ -95,6 +141,7 @@ export function PaymentPanel({
         setAmount("");
         setReference("");
         setNotes("");
+        setMethod("CASH");
       },
     );
 
@@ -122,6 +169,57 @@ export function PaymentPanel({
       <div className="px-5 py-4">
         {error && <ErrorNote>{error}</ErrorNote>}
 
+        {/* Shown whether or not credit is the chosen method. Hiding it behind
+            a dropdown option means only someone who already knew to look
+            would find it — which is nobody, since the whole point is that a
+            cancellation weeks ago left money behind. Credit nobody notices
+            never gets spent. */}
+        {creditPaise > 0 && (
+          <div
+            className={`mb-3.5 rounded-xl border px-4 py-3 ${
+              overCredit ? "border-[#f0c9c4] bg-[#fdf2f0]" : "border-[#d7e8e2] bg-[#f2f9f6]"
+            }`}
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-[0.87rem] text-[#16203a]">
+                <strong>{customerName}</strong> has{" "}
+                <strong>{formatINR(toRupees(creditPaise))}</strong> of travel credit.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setMethod("CREDIT");
+                  setAmount(String(toRupees(applicablePaise)));
+                }}
+                className="text-[0.8rem] font-medium text-[#0f7a55] underline underline-offset-2"
+              >
+                {creditCovers ? "Put ₹" + toRupees(applicablePaise).toLocaleString("en-IN") + " towards this" : "Use it"}
+              </button>
+            </div>
+
+            {overCredit ? (
+              <p className="mt-1.5 text-[0.8rem] font-medium text-[#b3261e]">
+                That&apos;s more than they have. The most you can apply is{" "}
+                {formatINR(toRupees(creditPaise))}.
+              </p>
+            ) : creditCovers ? (
+              <p className="mt-1.5 text-[0.78rem] text-[#5a6785]">
+                That is more than the {formatINR(toRupees(balancePaise))} outstanding — only the
+                balance can go on this booking, and the rest stays as credit.
+              </p>
+            ) : payingByCredit ? (
+              <p className="mt-1.5 text-[0.78rem] text-[#5a6785]">
+                Recorded as a payment on this booking. Anything left stays as credit.
+              </p>
+            ) : (
+              <p className="mt-1.5 text-[0.78rem] text-[#5a6785]">
+                Choose <strong>Travel credit</strong> as the method to put it towards this
+                booking.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Amount received">
             <div className="flex items-center gap-1.5 rounded-lg border border-[#e3e7ee] bg-white px-3 py-[7px] focus-within:border-teal">
@@ -134,7 +232,11 @@ export function PaymentPanel({
                 className="w-full border-0 bg-transparent text-[0.88rem] outline-none"
               />
             </div>
-            {overBalance ? (
+            {overCredit ? (
+              <p className="mt-1 text-[0.75rem] font-medium text-[#b3261e]">
+                Only {formatINR(toRupees(creditPaise))} of credit available.
+              </p>
+            ) : overBalance ? (
               <p className="mt-1 text-[0.75rem] font-medium text-[#b3261e]">
                 More than the {formatINR(toRupees(balancePaise))} outstanding.
               </p>
@@ -150,11 +252,16 @@ export function PaymentPanel({
           </Field>
 
           <Field label="How they paid">
-            <Select value={method} onChange={setMethod} options={METHODS} />
+            <Select value={method} onChange={setMethod} options={methodOptions} />
           </Field>
 
           <Field label="Reference / UTR">
-            <Input value={reference} onChange={setReference} placeholder="Optional" />
+            <Input
+              value={reference}
+              onChange={setReference}
+              placeholder={payingByCredit ? "Not needed for credit" : "Optional"}
+              disabled={payingByCredit}
+            />
           </Field>
           <Field label="Note">
             <Input value={notes} onChange={setNotes} placeholder="Optional" />
@@ -164,15 +271,16 @@ export function PaymentPanel({
         <button
           type="button"
           onClick={submit}
-          disabled={pending || !amount.trim() || overBalance}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
+          disabled={pending || !amount.trim() || overBalance || overCredit}
+          className={PRIMARY_BTN + " mt-4"}
         >
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           Record payment
         </button>
         <p className="mt-2 text-[0.78rem] text-[#8b96ad]">
-          Adds to the paid total and recalculates the balance. A request becomes confirmed on its
-          first payment.
+          {payingByCredit
+            ? "Comes out of their travel credit and counts as a payment on this booking. A request becomes confirmed on its first payment."
+            : "Adds to the paid total and recalculates the balance. A request becomes confirmed on its first payment."}
         </p>
       </div>
     </Panel>
@@ -188,6 +296,26 @@ export function PaymentPanel({
  * edit, and an admin who doesn't realise that will send a cancellation
  * notice by picking the wrong row in a dropdown.
  */
+/**
+ * The status panel's action button.
+ *
+ * Teal rather than the navy used for the filter bars: navy at 50% opacity
+ * was almost indistinguishable from navy at full, so the button read as
+ * disabled whether it was or not. Disabled is now a flat grey with no hover
+ * and no shadow — a different thing, not a fainter version of the same one.
+ *
+ * A step darker than --color-teal, brightening on hover the way
+ * .btn-primary does. The brand teal under cream text measures 3.9:1, below
+ * the 4.5:1 body-sized text needs; these two shades read as the same colour
+ * and measure 5.7:1 at rest and 5.0:1 hovered.
+ */
+const PRIMARY_BTN =
+  "inline-flex items-center gap-1.5 rounded-lg bg-[#146e6e] px-4 py-2 text-[0.85rem] " +
+  "font-semibold text-cream shadow-sm transition-colors hover:bg-[#177878] " +
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
+  "focus-visible:outline-teal disabled:cursor-not-allowed disabled:bg-[#e6e9ef] " +
+  "disabled:text-[#9aa4b8] disabled:shadow-none disabled:hover:bg-[#e6e9ef]";
+
 const STATUS_EMAIL: Record<string, string> = {
   CONFIRMED: "a booking confirmation",
   CANCELLED: "a cancellation notice",
@@ -202,6 +330,7 @@ export function StatusPanel({
   customerName,
   amountPaidPaise,
   refundedPaise,
+  pendingRefundPaise = 0,
 }: {
   bookingId: string;
   reference: string;
@@ -212,6 +341,8 @@ export function StatusPanel({
   customerName: string;
   amountPaidPaise: number;
   refundedPaise: number;
+  /** Asked of Razorpay, not yet confirmed. Blocks carrying forward. */
+  pendingRefundPaise?: number;
 }) {
   const { run, pending, error } = useAction();
   const [next, setNext] = useState(status);
@@ -241,6 +372,14 @@ export function StatusPanel({
    * second time.
    */
   const carrying = next === "CARRIED_FORWARD" && changed;
+  /**
+   * A refund already on its way out rules carrying forward out entirely.
+   *
+   * The server refuses it too. This is here so the button never looks
+   * available for something that cannot happen — and so the reason is on
+   * screen next to the choice, rather than arriving as an error after it.
+   */
+  const refundInFlight = carrying && pendingRefundPaise > 0;
   const willEmail = carrying ? "their travel credit" : STATUS_EMAIL[next];
 
   const creditPaise = Math.round((Number(credit) || 0) * 100);
@@ -260,7 +399,35 @@ export function StatusPanel({
    */
   const chargePaise = Math.max(heldPaise - creditPaise, 0);
   const chargeInput = String(chargePaise / 100);
-  const canSubmit = changed && (!carrying || creditValid) && !done;
+  const canSubmit = changed && (!carrying || creditValid) && !refundInFlight && !done;
+
+  /**
+   * A closed booking shows its status and nothing else.
+   *
+   * Not a disabled dropdown: an admin reading a greyed-out list of statuses
+   * has to work out for themselves which one is refusing and why. The server
+   * refuses this too — see lib/booking/lifecycle.ts — and this panel exists
+   * so nobody reaches that error by clicking a control that looked live.
+   */
+  if (!statusOpen(status)) {
+    const tone = BOOKING_TONE[status];
+    return (
+      <Panel title="Status">
+        <div className="px-5 py-4">
+          <Chip tone={tone?.tone ?? "mute"}>{tone?.label ?? status}</Chip>
+          <p className="mt-2.5 text-[0.83rem] leading-relaxed text-[#5a6785]">
+            This booking is closed, so its status can&apos;t be changed. Reopening it would
+            erase how it ended — and, for one carried forward, could hand out the same money
+            as credit twice.
+          </p>
+          <p className="mt-1.5 text-[0.8rem] leading-relaxed text-[#8b96ad]">
+            Refunds and payments can still be recorded above. If this one is wrong, take a new
+            booking rather than reviving this record.
+          </p>
+        </div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title="Status">
@@ -288,10 +455,22 @@ export function StatusPanel({
           </div>
         )}
 
+        {refundInFlight && (
+          <p
+            role="alert"
+            className="mt-3 rounded-lg border border-[#f0dcae] bg-[#fdf1dc] px-3 py-2.5 text-[0.82rem] leading-relaxed text-[#7a4a00]"
+          >
+            <strong>{formatINR(toRupees(pendingRefundPaise))} is on its way back</strong>{" "}
+            through Razorpay. Until it lands, this can&apos;t be carried forward — the same
+            money would go to their bank and become credit here. Wait for the refund to
+            complete, then carry forward whatever is left.
+          </p>
+        )}
+
         {/* Carrying forward needs an amount, so the extra fields appear here
             rather than behind a second button. The status IS the decision;
             these are its terms. */}
-        {carrying && (
+        {carrying && !refundInFlight && (
           <div className="mt-3 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
             <div className="flex items-baseline justify-between text-[0.83rem]">
               <span className="text-[#5a6785]">{customerName} has held</span>
@@ -354,7 +533,7 @@ export function StatusPanel({
           </div>
         )}
 
-        {changed && (
+        {changed && !refundInFlight && (
           <p className="mt-3 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] leading-relaxed text-[#7a4a00]">
             {seatsCounted && !["REQUESTED", "CONFIRMED"].includes(next)
               ? "Seats will be released back to the trip."
@@ -364,7 +543,7 @@ export function StatusPanel({
           </p>
         )}
 
-        {changed && (
+        {changed && !refundInFlight && (
           <p
             className={`mt-2 rounded-lg px-3 py-2 text-[0.8rem] leading-relaxed ${
               willEmail ? "bg-[#eaf4ef] text-[#0f5c3f]" : "bg-[#f2f4f7] text-[#5a6785]"
@@ -382,14 +561,24 @@ export function StatusPanel({
         )}
 
         {!confirming ? (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            disabled={pending || !canSubmit}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
-          >
-            Update status
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              disabled={pending || !canSubmit}
+              className={PRIMARY_BTN + " mt-4"}
+            >
+              Update status
+            </button>
+            {/* It sits disabled most of the time — on load `next` is the
+                current status, so there is nothing to save. Say that, rather
+                than leaving a faded button and no reason for it. */}
+            {!changed && !done && (
+              <p className="mt-2 text-[0.78rem] text-[#8b96ad]">
+                Choose a different status to update this booking.
+              </p>
+            )}
+          </>
         ) : (
           <div className="mt-4 rounded-lg border border-[#e3e7ee] bg-[#fbfcfd] p-3.5">
             <p className="text-[0.85rem] leading-relaxed text-[#16203a]">
@@ -449,7 +638,7 @@ export function StatusPanel({
                   })
                 }
                 disabled={pending}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-navy px-3.5 py-2 text-[0.85rem] font-medium text-cream hover:bg-[#1b2f56] disabled:opacity-50"
+                className={PRIMARY_BTN}
               >
                 {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {carrying ? "Carry forward" : willEmail ? "Update & send email" : "Update status"}
@@ -705,14 +894,16 @@ export function RefundPanel({
   reference,
   refundablePaise,
   pendingPaise,
-  refundedPaise,
+  gatewayRefundedPaise,
+  otherRefundedPaise,
+  heldPaise,
   owedPaise,
   gatewayPaidPaise,
   creditPaidPaise,
   hasOnlinePayment,
 }: {
   reference: string;
-  /** The CEILING — what Razorpay still holds and could send back. */
+  /** The CEILING — the smaller of what Razorpay holds and what we hold. */
   refundablePaise: number;
   /** What actually reached Razorpay. */
   gatewayPaidPaise: number;
@@ -724,7 +915,19 @@ export function RefundPanel({
    */
   creditPaidPaise: number;
   pendingPaise: number;
-  refundedPaise: number;
+  /**
+   * Razorpay-scoped, not the booking total.
+   *
+   * This box arranges money through Razorpay, so every line in it must be
+   * about Razorpay. It used to show the total refunded across every method
+   * — ₹1,15,000 sitting above "Paid through Razorpay ₹90,000", two numbers
+   * that cannot be reconciled by anyone reading them.
+   */
+  gatewayRefundedPaise: number;
+  /** Cash, UPI, bank transfer. Shown only to explain a lower ceiling. */
+  otherRefundedPaise: number;
+  /** What the booking still holds. The other half of the ceiling. */
+  heldPaise: number;
   /**
    * What we actually owe: money held above what the booking costs.
    *
@@ -767,8 +970,16 @@ export function RefundPanel({
 
       <dl className="mt-3 space-y-1 text-[0.83rem]">
         <div className="flex justify-between">
-          <dt className="text-[#5a6785]">Already refunded</dt>
-          <dd className="font-medium tabular-nums text-[#16203a]">{formatINR(toRupees(refundedPaise))}</dd>
+          <dt className="text-[#5a6785]">Paid through Razorpay</dt>
+          <dd className="font-medium tabular-nums text-[#16203a]">
+            {formatINR(toRupees(gatewayPaidPaise))}
+          </dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-[#5a6785]">Refunded through Razorpay</dt>
+          <dd className="font-medium tabular-nums text-[#16203a]">
+            {formatINR(toRupees(gatewayRefundedPaise))}
+          </dd>
         </div>
         {pendingPaise > 0 && (
           <div className="flex justify-between">
@@ -776,12 +987,14 @@ export function RefundPanel({
             <dd className="font-medium tabular-nums text-[#8b6a00]">{formatINR(toRupees(pendingPaise))}</dd>
           </div>
         )}
-        <div className="flex justify-between">
-          <dt className="text-[#5a6785]">Paid through Razorpay</dt>
-          <dd className="font-medium tabular-nums text-[#16203a]">
-            {formatINR(toRupees(gatewayPaidPaise))}
-          </dd>
-        </div>
+        {/* Not Razorpay's business, but it is why the ceiling can be lower
+            than the arithmetic above suggests. Muted, and named as separate. */}
+        {otherRefundedPaise > 0 && (
+          <div className="flex justify-between">
+            <dt className="text-[#8b96ad]">Returned another way</dt>
+            <dd className="tabular-nums text-[#8b96ad]">{formatINR(toRupees(otherRefundedPaise))}</dd>
+          </div>
+        )}
         {creditPaidPaise > 0 && (
           <div className="flex justify-between">
             <dt className="text-[#8b96ad]">Paid with travel credit</dt>
@@ -812,6 +1025,19 @@ export function RefundPanel({
         )}
       </dl>
 
+      {/* Two limits, and the ceiling is the smaller. When it's the booking
+          rather than the gateway, the numbers above don't add up on their own
+          — ₹90,000 in and ₹10,000 back, yet only ₹5,000 refundable. Say so. */}
+      {pendingPaise === 0 &&
+        refundablePaise > 0 &&
+        heldPaise < gatewayPaidPaise - gatewayRefundedPaise && (
+        <p className="mt-2 rounded-lg bg-[#f2f4f7] px-3 py-2 text-[0.8rem] leading-relaxed text-[#5a6785]">
+          Razorpay could still send{" "}
+          {formatINR(toRupees(gatewayPaidPaise - gatewayRefundedPaise))}, but this booking only
+          holds {formatINR(toRupees(heldPaise))} — the rest has already gone back another way.
+        </p>
+        )}
+
       {owedPaise > 0 && (
         <p className="mt-2 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.8rem] leading-relaxed text-[#7a4a00]">
           This booking is holding {formatINR(toRupees(owedPaise))} more than it costs — usually
@@ -820,7 +1046,19 @@ export function RefundPanel({
         </p>
       )}
 
-      {refundablePaise <= 0 ? (
+      {/* One refund at a time. While Razorpay hasn't answered, the ceiling
+          below is a guess — and a second refund raised against a guess is how
+          a booking ends up returning more than it took. */}
+      {pendingPaise > 0 ? (
+        <p
+          role="alert"
+          className="mt-3 rounded-lg border border-[#f0dcae] bg-[#fdf1dc] px-3 py-2.5 text-[0.82rem] leading-relaxed text-[#7a4a00]"
+        >
+          <strong>{formatINR(toRupees(pendingPaise))} is already on its way back.</strong>{" "}
+          Nothing else can be refunded until Razorpay confirms it — usually within a few
+          minutes, occasionally a day.
+        </p>
+      ) : refundablePaise <= 0 ? (
         <p className="mt-3 text-[0.83rem] text-[#5a6785]">
           Everything paid on this booking has been refunded.
         </p>
@@ -980,6 +1218,7 @@ function Input({
   type,
   min,
   max,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -988,6 +1227,8 @@ function Input({
   type?: "text" | "number";
   min?: number;
   max?: number;
+  /** For fields a chosen method makes meaningless — a UTR for travel credit. */
+  disabled?: boolean;
 }) {
   return (
     <input
@@ -998,7 +1239,8 @@ function Input({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={controlClass}
+      disabled={disabled}
+      className={controlClass + (disabled ? " cursor-not-allowed bg-[#f3f5f8] text-[#9aa4b8]" : "")}
     />
   );
 }
@@ -1059,10 +1301,16 @@ const RETURN_METHODS = [
 export function OfflineRefundPanel({
   reference,
   heldPaise,
+  pendingPaise = 0,
 }: {
   reference: string;
-  /** Everything still with us: paid, less refunds, less credit carried forward. */
+  /**
+   * What can still be handed back: paid, less every refund already promised
+   * — landed or in flight — less credit carried forward.
+   */
   heldPaise: number;
+  /** Of that, how much is already travelling back through Razorpay. */
+  pendingPaise?: number;
 }) {
   const { run, pending, error } = useAction();
   const [amount, setAmount] = useState("");
@@ -1079,7 +1327,7 @@ export function OfflineRefundPanel({
    */
   const [done, setDone] = useState<string | null>(null);
 
-  if (heldPaise <= 0) return null;
+  if (heldPaise <= 0 && pendingPaise <= 0) return null;
 
   const enteredPaise = Math.round((Number(amount) || 0) * 100);
   const overHeld = enteredPaise > heldPaise;
@@ -1096,13 +1344,29 @@ export function OfflineRefundPanel({
       {error && <ErrorNote>{error}</ErrorNote>}
       {done && <p className="mt-2 text-[0.83rem] font-medium text-[#0f7a55]">{done}</p>}
 
+      {/* Deliberately NOT blocked while a Razorpay refund is pending, unlike
+          the box above.
+
+          The ceiling already holds the in-flight money back, so the same
+          rupees cannot go out twice — and this is the only route left when a
+          webhook never lands. Freezing it would mean a stuck refund freezes
+          the whole booking, with no way to settle with the customer at all. */}
       <>
           <div className="mt-3 flex justify-between text-[0.83rem]">
-            <span className="text-[#5a6785]">Still held on this booking</span>
+            <span className="text-[#5a6785]">Available to return</span>
             <span className="font-semibold tabular-nums text-[#16203a]">
               {formatINR(toRupees(heldPaise))}
             </span>
           </div>
+          {pendingPaise > 0 && (
+            <p className="mt-1.5 rounded-lg bg-[#fdf1dc] px-3 py-2 text-[0.79rem] leading-relaxed text-[#7a4a00]">
+              A further {formatINR(toRupees(pendingPaise))}{" "}
+              is on its way back through Razorpay and is already held out of the figure
+              above — don&apos;t hand that part over as well.
+            </p>
+          )}
+          {/* Say why it is lower than what the booking is holding, or the
+              figure looks like it has lost money. */}
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <Field label="Amount (₹)">

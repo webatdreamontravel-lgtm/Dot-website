@@ -78,6 +78,33 @@ export async function creditHistory(profileId: string): Promise<CreditEntryRow[]
 }
 
 /**
+ * Several customers' histories at once, for the admin list screen.
+ *
+ * One query for the whole page of customers rather than one per row — the
+ * ledger is opened by clicking a row, and waiting on a round trip to show
+ * something the server already knows is the wrong trade.
+ */
+export async function creditHistories(
+  profileIds: string[],
+): Promise<Map<string, CreditEntryRow[]>> {
+  const grouped = new Map<string, CreditEntryRow[]>();
+  if (profileIds.length === 0) return grouped;
+
+  const rows = await prisma.creditEntry.findMany({
+    where: { profileId: { in: profileIds } },
+    orderBy: { createdAt: "desc" },
+    select: { ...entrySelect, profileId: true },
+  });
+
+  for (const { profileId, ...entry } of rows) {
+    const list = grouped.get(profileId);
+    if (list) list.push(entry);
+    else grouped.set(profileId, [entry]);
+  }
+  return grouped;
+}
+
+/**
  * Carries a cancelled booking's money forward.
  *
  * Must be called INSIDE the transaction that changes the booking's status and
