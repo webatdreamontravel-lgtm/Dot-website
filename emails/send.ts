@@ -19,6 +19,7 @@ import { activeProvider, deliver } from "./providers";
 
 const from = process.env.EMAIL_FROM ?? "Dream On Travel <onboarding@resend.dev>";
 
+
 export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
 
 export async function sendEmail({
@@ -51,7 +52,7 @@ export async function sendEmail({
     });
     // Only a previous FAILURE is worth retrying; anything else already went.
     if (already && already.status !== "FAILED") {
-      return { ok: true, id: null };
+      return { ok: true, id: null, deduped: true };
     }
   }
 

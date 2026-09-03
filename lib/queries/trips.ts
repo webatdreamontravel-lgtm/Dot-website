@@ -174,6 +174,9 @@ export async function getUpcomingTrips(limit?: number): Promise<TripCardView[]> 
   const rows = await prisma.trip.findMany({
     where: {
       status: "PUBLISHED",
+      // isActive outranks status: a published-but-inactive trip is off the
+      // site entirely. Every public read must carry both.
+      isActive: true,
       deletedAt: null,
       endDate: { gte: new Date() },
     },
@@ -192,7 +195,7 @@ export async function getFeaturedTrip(): Promise<TripCardView | null> {
 }
 
 export async function getTripBySlug(slug: string): Promise<TripDetailView | null> {
-  return loadTripDetail({ slug, status: "PUBLISHED", deletedAt: null });
+  return loadTripDetail({ slug, status: "PUBLISHED", isActive: true, deletedAt: null });
 }
 
 /**
@@ -207,7 +210,7 @@ export async function getTripForPreview(id: string): Promise<TripDetailView | nu
 }
 
 async function loadTripDetail(
-  where: { slug?: string; id?: string; status?: "PUBLISHED"; deletedAt: null },
+  where: { slug?: string; id?: string; status?: "PUBLISHED"; isActive?: boolean; deletedAt: null },
 ): Promise<TripDetailView | null> {
   const t = await prisma.trip.findFirst({
     where,
@@ -280,7 +283,7 @@ async function loadTripDetail(
 /** Slugs for generateStaticParams / sitemap. */
 export async function getPublishedTripSlugs(): Promise<string[]> {
   const rows = await prisma.trip.findMany({
-    where: { status: "PUBLISHED", deletedAt: null },
+    where: { status: "PUBLISHED", isActive: true, deletedAt: null },
     select: { slug: true },
   });
   return rows.map((r) => r.slug);

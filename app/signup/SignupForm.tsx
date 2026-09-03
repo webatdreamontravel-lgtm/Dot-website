@@ -8,6 +8,11 @@ import { AuthShell } from "@/components/auth/AuthShell";
 import { Combobox, LockedField, RadioGroup, TextField } from "@/components/auth/fields";
 import { DEFAULT_STATE, TAMIL_NADU_CITIES } from "@/lib/data/indianStates";
 import { latestBirthDateFor } from "@/lib/dates";
+import {
+  PHONE_COUNTRY_CODE,
+  PHONE_NATIONAL_DIGITS,
+  sanitisePhoneInput,
+} from "@/lib/phone";
 
 /** Kept in step with MIN_AGE in the signup action. */
 const MIN_SIGNUP_AGE = 18;
@@ -107,10 +112,18 @@ export function SignupForm({ next }: { next: string }) {
             name="phone"
             label="Phone number"
             type="tel"
-            placeholder="10-digit mobile"
+            inputMode="numeric"
+            prefix={PHONE_COUNTRY_CODE}
+            maxLength={PHONE_NATIONAL_DIGITS}
+            placeholder="98765 43210"
             autoComplete="tel"
             defaultValue={val.phone}
             error={err.phone}
+            // Uncontrolled, so the strip happens on the element itself.
+            onInput={(e) => {
+              const el = e.currentTarget;
+              el.value = sanitisePhoneInput(el.value);
+            }}
           />
         </Group>
 

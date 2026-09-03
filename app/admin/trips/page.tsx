@@ -11,7 +11,7 @@ import { TripRowMenu } from "./TripRowMenu";
 
 export const metadata = { title: "Trips" };
 
-type SP = Promise<{ q?: string; status?: string; from?: string; to?: string; page?: string }>;
+type SP = Promise<{ q?: string; status?: string; active?: string; from?: string; to?: string; page?: string }>;
 
 export default async function AdminTripsPage({ searchParams }: { searchParams: SP }) {
   await requireAdmin();
@@ -24,7 +24,15 @@ export default async function AdminTripsPage({ searchParams }: { searchParams: S
     countLiveTrips(),
   ]);
 
-  const hasFilters = Boolean(filters.q || filters.status || filters.from || filters.to);
+  // `active` is excluded when it holds the default — Clear should reset the
+  // real filters, not offer to undo a view the user never chose.
+  const hasFilters = Boolean(
+    filters.q ||
+      filters.status ||
+      (filters.active && filters.active !== "true") ||
+      filters.from ||
+      filters.to,
+  );
 
   return (
     <>
@@ -87,11 +95,30 @@ export default async function AdminTripsPage({ searchParams }: { searchParams: S
               value={filters.status}
               placeholder="Any status"
               options={[
-                { value: "PUBLISHED", label: "Active — on the site" },
-                { value: "DRAFT", label: "Inactive — not on the site" },
+                { value: "PUBLISHED", label: "Live on site" },
+                { value: "DRAFT", label: "Draft" },
                 { value: "ARCHIVED", label: "Archived" },
               ]}
             />
+          </FilterField>
+
+          {/* Its own control, not another Status option. The two are
+              independent — a trip can be Live but switched off, or a Draft
+              that is still marked active — and merging them would make those
+              combinations impossible to filter for. */}
+          <FilterField label="Visibility">
+            {/* No blank option: "no choice" already means active-only, so an
+                empty placeholder would imply "everything" and quietly lie.
+                Seeing archived trips is a deliberate act. */}
+            <select
+              name="active"
+              defaultValue={filters.active ?? "true"}
+              className={filterInputClass}
+            >
+              <option value="true">Active only</option>
+              <option value="false">Inactive only</option>
+              <option value="all">Active &amp; inactive</option>
+            </select>
           </FilterField>
           <FilterField label="Departs from">
             <input type="date" name="from" defaultValue={filters.from ?? ""} className={filterInputClass} />
@@ -125,10 +152,17 @@ function TripTable({ trips }: { trips: AdminTripRow[] }) {
           {trips.map((t) => {
             const pctFull = Math.round((t.seatsBooked / t.totalSeats) * 100);
             const tone = TRIP_TONE[t.status];
+            // A trip needs BOTH to be visible, so an inactive one is called
+            // out even when its status says "Live on site" — otherwise the
+            // table would claim it's public when it isn't.
+            const hidden = !t.isActive;
             return (
               <tr key={t.id} className="hover:bg-[#fafbfd]">
                 <td className="border-b border-[#eef1f6] px-4 py-3">
-                  <Link href={`/admin/trips/${t.id}`} className="block">
+                  {/* Bookings, not the editor. Opening a trip is nearly always
+                      to see who is on it — editing the itinerary is the rarer
+                      job, and it still has its own item in the row menu. */}
+                  <Link href={`/admin/trips/${t.id}/bookings`} className="block">
                     <div className="text-[0.89rem] font-semibold">{t.title}</div>
                     {/* The batch name is what tells apart three runs of
                         the same trip, so it gets prominence over the
@@ -152,7 +186,12 @@ function TripTable({ trips }: { trips: AdminTripRow[] }) {
                   {t.departed && <div className="text-[0.75rem] font-medium text-[#c33a3a]">departed</div>}
                 </td>
                 <td className="border-b border-[#eef1f6] px-4 py-3">
-                  <Chip tone={tone.tone}>{tone.label}</Chip>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Chip tone={tone.tone}>{tone.label}</Chip>
+                    {/* isActive outranks status, so say so when they disagree:
+                        a "Live on site" chip on a hidden trip would be a lie. */}
+                    {hidden && <Chip tone="warn">Inactive</Chip>}
+                  </div>
                 </td>
                 <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3">
                   <div className="text-[0.85rem] font-semibold tabular-nums">
@@ -169,7 +208,14 @@ function TripTable({ trips }: { trips: AdminTripRow[] }) {
                   {formatINR(rupees(t.pricePaise))}
                 </td>
                 <td className="border-b border-[#eef1f6] px-4 py-3">
-                  {t.razorpayEnabled ? <Chip tone="ok">Razorpay on</Chip> : <Chip tone="mute">Requests only</Chip>}
+                  {/* Online payment is on everywhere now, so a chip saying so
+                      on every row carries no information. Only the exception
+                      is worth showing. */}
+                  {t.razorpayEnabled ? (
+                    <span className="text-[0.8rem] text-[#8b96ad]">—</span>
+                  ) : (
+                    <Chip tone="mute">Requests only</Chip>
+                  )}
                 </td>
                 <td className="border-b border-[#eef1f6] px-4 py-3">
                   <Link
@@ -184,6 +230,7 @@ function TripTable({ trips }: { trips: AdminTripRow[] }) {
                     tripId={t.id}
                     slug={t.slug}
                     isPublished={t.status === "PUBLISHED"}
+                    isActive={t.isActive}
                     bookingCount={t.bookingCount}
                   />
                 </td>

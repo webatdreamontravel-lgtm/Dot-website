@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { TripDetailView } from "@/lib/queries/trips";
@@ -40,13 +41,16 @@ export function StickyTripBar({ trip }: { trip: TripDetailView }) {
                   <p className="text-xs uppercase tracking-[0.18em] text-navy/55">From</p>
                   <p className="font-medium">{formatINR(minPrice)} <span className="text-sm text-navy/55">{taxSuffix(trip.gstPercent, trip.tcsPercent)}</span></p>
                 </div>
-                <a
-                  href="#book"
-                  aria-disabled={isSoldOut}
-                  className={isSoldOut ? "btn bg-navy/15 text-navy/50 pointer-events-none" : "btn btn-primary"}
-                >
-                  {isSoldOut ? "Sold Out" : "Book Now"}
-                </a>
+                {isSoldOut ? (
+                  <span className="btn bg-navy/15 text-navy/50">Sold Out</span>
+                ) : (
+                  /* Straight to checkout. It used to be href="#book", which
+                     scrolled to the bottom of the page and asked for the same
+                     click again. */
+                  <Link href={`/trips/${trip.slug}/book`} className="btn btn-primary">
+                    Book Now
+                  </Link>
+                )}
               </div>
             </div>
           </motion.div>
@@ -67,13 +71,16 @@ export function StickyTripBar({ trip }: { trip: TripDetailView }) {
               <p className="text-[10px] uppercase tracking-[0.18em] text-navy/55">From</p>
               <p className="font-display text-xl leading-tight">{formatINR(minPrice)}</p>
             </div>
-            <a
-              href="#book"
-              aria-disabled={isSoldOut}
-              className={isSoldOut ? "btn bg-navy/15 text-navy/50 pointer-events-none" : "btn btn-primary flex-1 justify-center"}
-            >
-              {isSoldOut ? "Sold Out" : "Book Now"}
-            </a>
+            {isSoldOut ? (
+              <span className="btn bg-navy/15 text-navy/50 flex-1 justify-center">Sold Out</span>
+            ) : (
+              <Link
+                href={`/trips/${trip.slug}/book`}
+                className="btn btn-primary flex-1 justify-center"
+              >
+                Book Now
+              </Link>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

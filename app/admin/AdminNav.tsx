@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Map, Receipt, Star, Users } from "lucide-react";
+import { LayoutGrid, Map, Receipt, Star, Users, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/admin/trips", label: "Trips", icon: Map },
   { href: "/admin/bookings", label: "Bookings", icon: Receipt },
   { href: "/admin/customers", label: "Customers", icon: Users },
+  { href: "/admin/credit", label: "Travel credit", icon: Wallet },
   { href: "/admin/reviews", label: "Reviews", icon: Star },
 ];
 
