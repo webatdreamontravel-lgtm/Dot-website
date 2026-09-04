@@ -32,6 +32,14 @@ type Traveller = {
   phone: string | null;
   email: string | null;
   cancelledAt: Date | string | null;
+  /**
+   * Collected at checkout, stored on the lead traveller, and until now shown
+   * only to the customer on their own booking page — never on this screen.
+   * The one moment it is needed is the one moment the customer can't be
+   * reached, and this is where the team looks.
+   */
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
 };
 
 const METHODS = [
@@ -729,12 +737,16 @@ export function StatusPanel({
 export function DetailsPanel({
   bookingId,
   source,
+  customerNotes,
   internalNotes,
   travellers,
   canRemoveSeat,
 }: {
   bookingId: string;
   source: string;
+  /** What the customer wrote at checkout. Never editable here. */
+  customerNotes: string | null;
+  /** The team's own, plus warnings the system stamps on a booking. */
   internalNotes: string | null;
   travellers: Traveller[];
   canRemoveSeat: boolean;
@@ -743,6 +755,7 @@ export function DetailsPanel({
   const [editing, setEditing] = useState(false);
   const [src, setSrc] = useState(source);
   const [notes, setNotes] = useState(internalNotes ?? "");
+  const [custNotes, setCustNotes] = useState(customerNotes ?? "");
   const [rows, setRows] = useState(travellers);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
@@ -768,6 +781,23 @@ export function DetailsPanel({
   // and records a reason. Offering it here would just fail.
   const canCancelSeats = canRemoveSeat && activeCount > 1;
 
+  // Taken from whichever traveller carries it. Checkout stores it on the
+  // lead, but reading across the party means an imported or hand-edited
+  // booking that put it elsewhere still shows it.
+  const emergency =
+    rows
+      .map((t) => [t.emergencyContactName, t.emergencyContactPhone].filter(Boolean).join(" · "))
+      .find(Boolean) ?? "";
+
+  // Held as one pair for the whole party, matching how it is asked for and
+  // how it is stored — on the lead traveller, cleared from the rest.
+  const [emName, setEmName] = useState(
+    travellers.map((t) => t.emergencyContactName).find(Boolean) ?? "",
+  );
+  const [emPhone, setEmPhone] = useState(
+    travellers.map((t) => t.emergencyContactPhone).find(Boolean) ?? "",
+  );
+
   const patch = (id: string, changes: Partial<Traveller>) =>
     setRows((prev) => prev.map((t) => (t.id === id ? { ...t, ...changes } : t)));
 
@@ -778,6 +808,9 @@ export function DetailsPanel({
           bookingId,
           source: src as "WEB",
           internalNotes: notes,
+          customerNotes: custNotes,
+          emergencyContactName: emName,
+          emergencyContactPhone: emPhone,
           travellers: rows.map((t) => ({
             id: t.id,
             fullName: t.fullName,
@@ -800,6 +833,9 @@ export function DetailsPanel({
               setRows(travellers);
               setSrc(source);
               setNotes(internalNotes ?? "");
+              setCustNotes(customerNotes ?? "");
+              setEmName(travellers.map((t) => t.emergencyContactName).find(Boolean) ?? "");
+              setEmPhone(travellers.map((t) => t.emergencyContactPhone).find(Boolean) ?? "");
             }}
             className="inline-flex items-center gap-1 text-[0.82rem] text-[#5a6785] hover:text-navy"
           >
@@ -896,12 +932,38 @@ export function DetailsPanel({
                   <p className="text-[0.8rem] text-[#8b96ad]">
                     {[t.phone, t.email].filter(Boolean).join(" · ") || "no contact"}
                   </p>
+
                 </>
               )}
             </li>
             );
           })}
         </ul>
+
+        {/* One contact for the whole party, which is how checkout asks for it
+            — "someone not travelling with you, one for the whole group is
+            fine". It is stored on the lead traveller only, so showing it
+            inside their card made it look like Ajay's contact rather than
+            the booking's. Always shown, even when empty: 38 of 39 web
+            bookings skip the field, and a blank that renders nothing looks
+            exactly like a field nobody ever asked for. */}
+        <div className="mt-4 border-t border-[#eef1f6] pt-3.5">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#b26a00]">
+            In an emergency
+          </p>
+          {editing ? (
+            <div className="mt-1.5 grid gap-2.5 sm:grid-cols-2">
+              <Input value={emName} onChange={setEmName} placeholder="Name" />
+              <PhoneInput value={emPhone} onChange={setEmPhone} className={controlClass} />
+            </div>
+          ) : emergency ? (
+            <p className="mt-1 text-[0.88rem] text-[#16203a]">{emergency}</p>
+          ) : (
+            <p className="mt-1 text-[0.85rem] text-[#a8b0c0]">
+              Not given — worth asking for
+            </p>
+          )}
+        </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Field label="Source">
@@ -913,13 +975,40 @@ export function DetailsPanel({
           </Field>
         </div>
 
+        {/* Editable now that it has its own column — it was read-only only
+            while the team's box wrote to the same field and would have wiped
+            it. Kept visually separate so it stays obvious whose words these
+            are: an admin recording "she asked for a lower berth" is speaking
+            for the customer, not making a note to the team. */}
+        {(editing || customerNotes) && (
+          <div className="mt-3 rounded-lg border border-[#d7e8e2] bg-[#f2f9f6] px-3.5 py-3">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#0f7a55]">
+              Customer notes
+            </p>
+            {editing ? (
+              <textarea
+                value={custNotes}
+                onChange={(e) => setCustNotes(e.target.value)}
+                rows={2}
+                placeholder="What the customer asked for. They can see this."
+                className="mt-1.5 w-full rounded-lg border border-[#c5ddd5] bg-white px-3 py-2 text-[0.86rem] outline-none focus:border-teal"
+              />
+            ) : (
+              <p className="mt-1 whitespace-pre-line text-[0.86rem] leading-relaxed text-[#16203a]">
+                {customerNotes}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="mt-3">
-          <Field label="Internal notes">
+          <Field label="Admin notes">
             {editing ? (
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
+                placeholder="For the team. The customer never sees this."
                 className="w-full rounded-lg border border-[#e3e7ee] bg-white px-3 py-2 text-[0.86rem] outline-none focus:border-teal"
               />
             ) : (

@@ -86,9 +86,8 @@ export default async function TripBookingsPage({
         </div>
       </header>
 
-      {/* Six figures in two rows of three: the top row is the trip (bookings
-          and seats), the bottom row is the money (held, owed each way). */}
-      <div className="mb-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+      {/* The trip, and the one number to reconcile against a bank balance. */}
+      <div className="mb-3.5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
         <Stat label="Bookings" value={String(totals.count)} />
         {/* The trip's own counter, not a sum over bookings. It is the number
             reserve_seats() maintains and the one capacity is checked against,
@@ -100,12 +99,6 @@ export default async function TripBookingsPage({
           value={`${trip.seatsBooked}`}
           sub={`of ${trip.totalSeats}`}
         />
-        <Stat
-          label="Cancelled seats"
-          value={String(totals.cancelledSeats)}
-          sub={totals.cancelledSeats > 0 ? "released back to the trip" : undefined}
-          tone={totals.cancelledSeats > 0 ? "warn" : undefined}
-        />
         {/* The figure to reconcile against a bank balance. "Collected" is
             gross and keeps counting money already sent back, so a trip that
             refunded half its bookings still reported the full amount taken. */}
@@ -113,13 +106,43 @@ export default async function TripBookingsPage({
           label="Held"
           value={formatINR(rupees(totals.netHeldPaise))}
           sub={
-            totals.refundedPaise > 0
+            totals.creditIssuedPaise > 0
               ? `${formatINR(rupees(totals.collectedPaise))} in · ${formatINR(
                   rupees(totals.refundedPaise),
-                )} back`
-              : "collected, net of refunds"
+                )} back · ${formatINR(rupees(totals.creditIssuedPaise))} to credit`
+              : totals.refundedPaise > 0
+                ? `${formatINR(rupees(totals.collectedPaise))} in · ${formatINR(
+                    rupees(totals.refundedPaise),
+                  )} back`
+                : "collected, net of refunds"
           }
           tone="ok"
+        />
+      </div>
+
+      {/* Where that money actually sits, and what is owed each way. */}
+      <div className="mb-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+        {/* The two halves of Held, in their own boxes.
+            A cancellation charge is not trip income — it is money kept from
+            someone who isn't coming — and one card reporting both made a trip
+            whose only remaining money was a ₹1,999 charge look funded. */}
+        <Stat
+          label="From travelling seats"
+          value={formatINR(rupees(totals.liveHeldPaise))}
+          sub="money for people still going"
+          tone="ok"
+        />
+        <Stat
+          label="Kept from cancellations"
+          value={formatINR(rupees(totals.retainedPaise))}
+          sub={
+            totals.retainedPaise > 0
+              ? "cancellation charges, not trip income"
+              : totals.retainedPaise < 0
+                ? "more went back than these bookings took"
+                : "nothing kept"
+          }
+          tone={totals.retainedPaise !== 0 ? "warn" : undefined}
         />
         <Stat
           label="Owed to us"

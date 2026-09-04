@@ -8,6 +8,7 @@ import {
   checkoutMinutesLeft,
   statusSettled,
 } from "@/lib/booking/lifecycle";
+import { paymentStateOf } from "@/lib/booking/paymentState";
 import {
   committedGatewayRefundPaise,
   committedRefundPaise,
@@ -173,9 +174,7 @@ export default async function AdminBookingPage({
   const feesCollected = booking.payments
     .filter((p) => p.status === "CAPTURED")
     .reduce((n, p) => n + p.convenienceFeePaise, 0);
-  const paymentState =
-    booking.amountPaidPaise === 0 ? "UNPAID" : balancePaise <= 0 ? "PAID" : "PARTIAL";
-  const pay = PAYMENT_TONE[paymentState];
+  const pay = PAYMENT_TONE[paymentStateOf({ ...booking, netHeldPaise })];
   const seatsCounted = ["REQUESTED", "CONFIRMED"].includes(booking.status);
 
   return (
@@ -271,6 +270,7 @@ export default async function AdminBookingPage({
           <DetailsPanel
             bookingId={booking.id}
             source={booking.source}
+            customerNotes={booking.customerNotes}
             internalNotes={booking.internalNotes}
             travellers={booking.travellers}
             // Removing a seat from an already-cancelled booking would give

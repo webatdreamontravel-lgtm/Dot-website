@@ -395,6 +395,12 @@ model Booking {
   cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(3)
   cancellationReason String?   @map("cancellation_reason")
   /// Admin-only. Never rendered to the customer.
+  /// Anything the customer wrote at checkout. Never written by the team —
+  /// their words are not ours to edit, and one shared column meant the
+  /// admin's own note silently overwrote theirs.
+  customerNotes      String?   @map("customer_notes")
+  /// The team's own notes, plus the warnings settlePayment and createOrder
+  /// stamp on a booking when something needs a human.
   internalNotes      String?   @map("internal_notes")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)

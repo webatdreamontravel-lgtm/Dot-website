@@ -23,6 +23,8 @@
  * The amount paid is what tells them apart.
  */
 
+import { amountOutstanding } from "@/lib/booking/balance";
+
 export type CustomerStatus = {
   label: string;
   /** Tailwind classes for the badge. */
@@ -57,6 +59,8 @@ export function customerStatus(booking: {
   amountPaidPaise: number;
   /** What has actually come back. Absent on screens that don't fetch it. */
   refundedPaise?: number;
+  /** Moved to their travel credit. Absent on screens that don't fetch it. */
+  creditIssuedPaise?: number;
 }): CustomerStatus {
   const { status, amountPaidPaise } = booking;
   const refunded = booking.refundedPaise ?? 0;
@@ -67,19 +71,22 @@ export function customerStatus(booking: {
     /**
      * No money came back, so this must not read like a refund.
      *
-     * The credit amount is deliberately absent: this page knows what the
-     * booking cost, not what the team decided to carry forward, and those are
-     * different numbers whenever a cancellation charge or a goodwill top-up
-     * was involved. The balance is shown separately, from the ledger, where
-     * it is actually known.
+     * The amount is read from the ledger entries this booking created, not
+     * inferred from what was paid. Those are different numbers whenever a
+     * cancellation charge or a goodwill top-up was involved, and guessing
+     * would put a figure in front of the customer that nobody decided.
      */
+    const carried = booking.creditIssuedPaise ?? 0;
     return {
       label: "Carried forward",
       tone: NEUTRAL,
       body:
-        "This booking was cancelled and what you paid is being held as travel credit " +
-        "towards a future trip. It doesn't expire — tell us when you're ready to book " +
-        "and we'll put it towards the cost.",
+        (carried > 0
+          ? `${rupees(carried)} is being held as travel credit towards a future trip. `
+          : "What you paid is being held as travel credit towards a future trip. ") +
+        "It doesn't expire — tell us when you're ready to book and we'll put it " +
+        "towards the cost.",
+      note: carried > 0 ? `${rupees(carried)} in travel credit` : undefined,
     };
   }
 
@@ -191,11 +198,14 @@ export function canPayBalanceOnline(booking: {
   status: string;
   totalPaise: number;
   amountPaidPaise: number;
+  refundedPaise: number;
   trip: { razorpayEnabled: boolean };
 }): boolean {
   return (
     booking.status === "CONFIRMED" &&
-    booking.totalPaise - booking.amountPaidPaise > 0 &&
+    // Refund-aware, like every other balance. Money handed back is owed
+    // again, so a fully-refunded booking has a balance to settle.
+    amountOutstanding(booking) > 0 &&
     // Money already in means this is a balance rather than a first payment —
     // the booking flow itself is where a first payment belongs.
     booking.amountPaidPaise > 0 &&

@@ -3,6 +3,7 @@ import Image from "next/image";
 import { ArrowRight, CalendarDays, MapPin, Users } from "lucide-react";
 
 import { toRupees } from "@/lib/booking/pricing";
+import { amountOutstanding } from "@/lib/booking/balance";
 import { canPayBalanceOnline, customerStatus } from "@/lib/booking/customerStatus";
 import { cn, formatDateRange, formatINR } from "@/lib/utils";
 import { BalancePayment } from "@/app/account/bookings/[reference]/BalancePayment";
@@ -18,6 +19,8 @@ export type BookingRow = {
   amountPaidPaise: number;
   /** What has come back. Drives the cancellation-charge wording. */
   refundedPaise: number;
+  /** Ledger entries this booking created, when it was carried forward. */
+  creditIssued?: { amountPaise: number }[];
   trip: {
     slug: string;
     title: string;
@@ -52,9 +55,13 @@ export function BookingCard({
   booking: BookingRow;
   customer: { name: string | null; email: string; phone: string | null };
 }) {
-  const status = customerStatus(booking);
+  // Same figure the detail page shows, so the card and the booking behind
+  // it can't quote different amounts.
+  const carriedForwardPaise =
+    booking.creditIssued?.reduce((n, c) => n + c.amountPaise, 0) ?? 0;
+  const status = customerStatus({ ...booking, creditIssuedPaise: carriedForwardPaise });
 
-  const balance = Math.max(booking.totalPaise - booking.amountPaidPaise, 0);
+  const balance = amountOutstanding(booking);
   const active = ["CONFIRMED", "REQUESTED"].includes(booking.status);
   const canPay = canPayBalanceOnline(booking);
   // Owed money on a booking nobody can pay online yet. The card must say why

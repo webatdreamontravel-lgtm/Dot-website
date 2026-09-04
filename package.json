@@ -21,7 +21,8 @@
     "test:seed": "tsx --env-file=.env.local scripts/seed-test-trips.ts",
     "test:reset": "tsx --env-file=.env.local scripts/reset-test-trips.ts",
     "test:state": "node --env-file=.env.local scripts/payment-state.mjs",
-    "test:webhook": "node --env-file=.env.local scripts/replay-webhook.mjs"
+    "test:webhook": "node --env-file=.env.local scripts/replay-webhook.mjs",
+    "repair:seats": "tsx --env-file=.env.local scripts/repair-seat-counts.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

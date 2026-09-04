@@ -79,6 +79,10 @@ export async function getBookingForCustomer(reference: string, profileId: string
       unitPricePaise: true, subtotalPaise: true,
       gstPercent: true, gstPaise: true, tcsPercent: true, tcsPaise: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      // Money that left this booking for the customer's travel credit. They
+      // are the ones who own it, so their own page is the first place it
+      // should be named.
+      creditIssued: { select: { amountPaise: true } },
       trip: {
         select: {
           slug: true, title: true, batchName: true, startDate: true, endDate: true,
@@ -159,6 +163,8 @@ function listBookings(profileId: string) {
     select: {
       id: true, reference: true, status: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      // Named on the card when a booking was carried forward.
+      creditIssued: { select: { amountPaise: true } },
       trip: {
         select: {
           slug: true, title: true, batchName: true,
@@ -238,6 +244,8 @@ export async function getCustomerBookings(
     select: {
       id: true, reference: true, status: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
+      // Named on the card when a booking was carried forward.
+      creditIssued: { select: { amountPaise: true } },
       trip: {
         select: {
           slug: true, title: true, batchName: true, destination: true,

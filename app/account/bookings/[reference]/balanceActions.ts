@@ -1,6 +1,7 @@
 "use server";
 
 import { getSessionProfile } from "@/lib/auth";
+import { amountOutstanding } from "@/lib/booking/balance";
 import { prisma } from "@/lib/prisma";
 import { paymentsConfigured, razorpay } from "@/lib/payments/client";
 
@@ -36,7 +37,7 @@ export async function startBalancePayment(input: {
     where: { reference: input.reference, profileId: profile.id },
     select: {
       id: true, reference: true, status: true,
-      totalPaise: true, amountPaidPaise: true,
+      totalPaise: true, amountPaidPaise: true, refundedPaise: true,
       trip: { select: { slug: true, title: true } },
       payments: {
         where: { status: "CREATED", razorpayOrderId: { not: null } },
@@ -53,7 +54,7 @@ export async function startBalancePayment(input: {
     return { ok: false, error: "This booking isn't active, so there's nothing to pay." };
   }
 
-  const balancePaise = booking.totalPaise - booking.amountPaidPaise;
+  const balancePaise = amountOutstanding(booking);
   if (balancePaise <= 0) {
     return { ok: false, error: "This booking is fully paid — nothing left to settle." };
   }

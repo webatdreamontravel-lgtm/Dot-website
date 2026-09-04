@@ -476,6 +476,29 @@ const detailsSchema = z.object({
   bookingId: z.string().uuid(),
   source: z.enum(["WEB", "ADMIN_OFFLINE", "WHATSAPP", "FESTIVAL"]),
   internalNotes: z.string().trim().max(2000).optional().or(z.literal("")),
+  /**
+   * Editable, now that it has a column of its own.
+   *
+   * It was made read-only when the two notes shared one field, because
+   * saving the team's note wiped whatever the customer had written. They
+   * are separate columns now, so an admin taking a request over the phone
+   * can record it where the customer's own words live — deliberately, in a
+   * box that says whose they are.
+   */
+  customerNotes: z.string().trim().max(1000).optional().or(z.literal("")),
+  /**
+   * One contact for the whole party, which is how checkout asks for it.
+   * Stored on the lead traveller and cleared from the rest, so there is
+   * only ever one answer to "who do we call".
+   */
+  emergencyContactName: z.string().trim().max(120).optional().or(z.literal("")),
+  emergencyContactPhone: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || isValidPhone(v), "Enter a 10-digit emergency number")
+    .transform(toNationalDigits)
+    .optional()
+    .or(z.literal("")),
   travellers: z
     .array(
       z.object({
@@ -507,7 +530,10 @@ export async function updateBookingDetails(
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the details." };
   }
-  const { bookingId, source, internalNotes, travellers } = parsed.data;
+  const {
+    bookingId, source, internalNotes, customerNotes,
+    emergencyContactName, emergencyContactPhone, travellers,
+  } = parsed.data;
 
   try {
     const slug = await prisma.$transaction(async (tx) => {
@@ -519,15 +545,29 @@ export async function updateBookingDetails(
 
       await tx.booking.update({
         where: { id: booking.id },
-        data: { source, internalNotes: internalNotes || null },
+        data: {
+          source,
+          internalNotes: internalNotes || null,
+          customerNotes: customerNotes || null,
+        },
       });
 
-      for (const t of travellers) {
+      for (const [i, t] of travellers.entries()) {
         await tx.bookingTraveller.update({
           where: { id: t.id },
           // Scoped by booking id as well, so a tampered form can't rewrite a
           // traveller that belongs to somebody else's booking.
-          data: { fullName: t.fullName, phone: t.phone || null, email: t.email || null },
+          data: {
+            fullName: t.fullName,
+            phone: t.phone || null,
+            email: t.email || null,
+            // Written to the lead and cleared from everyone else. Otherwise
+            // an edit leaves a second copy behind on a traveller the form no
+            // longer shows it against, and the panel reads whichever it
+            // finds first.
+            emergencyContactName: i === 0 ? emergencyContactName || null : null,
+            emergencyContactPhone: i === 0 ? emergencyContactPhone || null : null,
+          },
         });
       }
 

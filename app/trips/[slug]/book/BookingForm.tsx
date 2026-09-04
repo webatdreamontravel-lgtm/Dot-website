@@ -567,6 +567,15 @@ function PriceSummary({
               {formatINR(toRupees(price.totalPaise))}
             </dd>
           </div>
+          {/* Razorpay adds its own fee inside their window, so the card is
+              charged a little more than the figure above. We don't know the
+              amount — it depends on how they choose to pay — but they should
+              not meet it for the first time on Razorpay's screen. */}
+          {trip.razorpayEnabled && (
+            <p className="mt-2 text-[0.78rem] leading-relaxed text-cream/50">
+              A convenience fee will be added at checkout.
+            </p>
+          )}
         </dl>
 
         {canChoose && (

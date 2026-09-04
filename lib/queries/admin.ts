@@ -4,6 +4,7 @@ import { endOfDay, parseDateFilter } from "@/lib/dates";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { statusSettled } from "@/lib/booking/lifecycle";
+import { paymentStateOf } from "@/lib/booking/paymentState";
 
 /**
  * Admin read models.
@@ -274,8 +275,6 @@ export type BookingTotals = {
   count: number;
   /** Seats actually held — cancelled and expired bookings excluded. */
   seats: number;
-  /** Seats given up: whole cancelled bookings, plus individually cancelled travellers. */
-  cancelledSeats: number;
   totalPaise: number;
   /** Every rupee taken in, including on bookings later cancelled. */
   collectedPaise: number;
@@ -292,6 +291,21 @@ export type BookingTotals = {
    * is held deliberately.
    */
   toRefundPaise: number;
+  /**
+   * Held, split by whether the seat is actually going.
+   *
+   *   liveHeld   money for people on this trip. The figure that should
+   *              match the seats sold.
+   *   retained   money still on bookings that are NOT going — a cancellation
+   *              charge kept on purpose, or something nobody has settled yet.
+   *
+   * One card conflated them, so a trip whose only remaining money was a
+   * ₹1,999 cancellation charge reported it as trip income.
+   */
+  liveHeldPaise: number;
+  retainedPaise: number;
+  /** Moved to customers' credit ledgers. Ours to deliver, not ours to keep. */
+  creditIssuedPaise: number;
   /** Already returned. */
   refundedPaise: number;
   /**
@@ -372,7 +386,7 @@ function bookingWhere(filters: BookingFilters, tripId?: string): Prisma.BookingW
 const DEAD_STATUSES = ["CANCELLED", "EXPIRED"] as const;
 
 async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTotals> {
-  const [agg, live, deadSeats, cancelledTravellers, dead, liveRows] = await Promise.all([
+  const [agg, live, dead, liveRows, allRows] = await Promise.all([
     prisma.booking.aggregate({
       where,
       _count: { _all: true },
@@ -384,19 +398,6 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
     prisma.booking.aggregate({
       where: { AND: [where, { status: { notIn: [...DEAD_STATUSES] } }] },
       _sum: { seats: true },
-    }),
-    prisma.booking.aggregate({
-      where: { AND: [where, { status: { in: [...DEAD_STATUSES] } }] },
-      _sum: { seats: true },
-    }),
-    // Seats given up one at a time, on bookings that are otherwise alive.
-    // Counted separately from whole cancelled bookings so neither is
-    // double-counted.
-    prisma.bookingTraveller.count({
-      where: {
-        cancelledAt: { not: null },
-        booking: { AND: [where, { status: { notIn: [...DEAD_STATUSES] } }] },
-      },
     }),
     // Money sitting on bookings that are no longer going anywhere. REFUNDED
     // and PARTIALLY_REFUNDED are excluded: both are settled outcomes, so
@@ -418,7 +419,33 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
       where: { AND: [where, { status: { in: ["REQUESTED", "CONFIRMED"] } }] },
       select: { totalPaise: true, amountPaidPaise: true, refundedPaise: true },
     }),
+    /**
+     * Every booking, with the credit each one sent to a ledger.
+     *
+     * `netHeld` used to be collected − refunded, which counts carried-forward
+     * money as still held: a trip where every booking was carried forward
+     * reported ₹13,004 held while holding nothing at all. Credit belongs to
+     * the customer the moment it is issued.
+     */
+    prisma.booking.findMany({
+      where,
+      select: {
+        status: true, amountPaidPaise: true, refundedPaise: true,
+        creditIssued: { select: { amountPaise: true } },
+      },
+    }),
   ]);
+
+  let liveHeldPaise = 0;
+  let retainedPaise = 0;
+  let creditIssuedPaise = 0;
+  for (const b of allRows) {
+    const credit = b.creditIssued.reduce((n, c) => n + c.amountPaise, 0);
+    creditIssuedPaise += credit;
+    const held = b.amountPaidPaise - b.refundedPaise - credit;
+    if (statusSettled(b.status)) retainedPaise += held;
+    else liveHeldPaise += held;
+  }
 
   const totalPaise = agg._sum.totalPaise ?? 0;
   const collectedPaise = agg._sum.amountPaidPaise ?? 0;
@@ -450,14 +477,17 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
   return {
     count: agg._count._all,
     seats: live._sum.seats ?? 0,
-    cancelledSeats: (deadSeats._sum.seats ?? 0) + cancelledTravellers,
     totalPaise,
     collectedPaise,
     outstandingPaise,
     // Never negative: over-refunding is a data error, not a debt the
     // customer owes back.
     toRefundPaise: Math.max(deadCollected - deadRefunded, 0) + overpaidPaise,
-    netHeldPaise: collectedPaise - refundedPaise,
+    liveHeldPaise,
+    retainedPaise,
+    creditIssuedPaise,
+    // The two halves, and nothing else — so the cards always add up to it.
+    netHeldPaise: liveHeldPaise + retainedPaise,
     refundedPaise,
   };
 }
@@ -510,8 +540,10 @@ function withPaymentState<
     // out in the Held column, and a second label saying the same thing adds
     // noise without adding a fact. The figure that needs acting on lives in
     // the Balance column and on the booking itself.
-    paymentState:
-      b.amountPaidPaise === 0 ? "UNPAID" : balance <= 0 ? "PAID" : "PARTIAL",
+    //
+    // Measured against what was PAID, never against `balance` — see
+    // paymentStateOf() for the two ways that got it wrong.
+    paymentState: paymentStateOf({ ...b, netHeldPaise: netHeld }),
   };
 }
 
@@ -613,7 +645,7 @@ export async function getAdminBooking(reference: string) {
       unitPricePaise: true, subtotalPaise: true,
       gstPercent: true, gstPaise: true, tcsPercent: true, tcsPaise: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true,
-      internalNotes: true, cancellationReason: true,
+      customerNotes: true, internalNotes: true, cancellationReason: true,
       // Money that left this booking for the customer's credit ledger.
       creditIssued: { select: { amountPaise: true } },
       createdAt: true, confirmedAt: true, cancelledAt: true,
