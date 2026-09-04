@@ -23,7 +23,35 @@ import { siteConfig } from "@/lib/data/siteConfig";
  */
 export function siteUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (explicit) return stripSlash(explicit);
+
+  /**
+   * An explicit override wins — unless it points at localhost on a machine
+   * that plainly isn't localhost.
+   *
+   * This is the failure this guard exists for: .env.local gets copied into
+   * Vercel's environment variables, NEXT_PUBLIC_SITE_URL comes along with
+   * it, and every verification email in production then carries
+   * "http://localhost:3000/auth/confirm?token_hash=…". The link is
+   * unclickable for the customer, the signup is unfinishable, and nothing
+   * errors — the emails send perfectly, they just cannot be used.
+   *
+   * A localhost URL is never right in a deployed environment, so it is
+   * ignored rather than obeyed, and we fall through to the host the
+   * platform reports.
+   */
+  if (explicit && !(isDeployed() && isLocalhost(explicit))) {
+    return stripSlash(explicit);
+  }
+
+  if (explicit) {
+    // Loud, because the symptom is otherwise invisible: mail that looks
+    // fine and does nothing.
+    console.warn(
+      `[siteUrl] Ignoring NEXT_PUBLIC_SITE_URL="${explicit}" — it points at ` +
+        `localhost but this is a deployed environment. Remove it from the ` +
+        `hosting environment variables, or set it to the real domain.`,
+    );
+  }
 
   const vercelHost =
     process.env.VERCEL_ENV === "production"
@@ -41,3 +69,18 @@ export function siteUrl(): string {
 }
 
 const stripSlash = (s: string) => s.replace(/\/+$/, "");
+
+/** Running somewhere that isn't a developer's machine. */
+function isDeployed(): boolean {
+  return Boolean(process.env.VERCEL || process.env.NETLIFY) || process.env.NODE_ENV === "production";
+}
+
+function isLocalhost(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "0.0.0.0" || hostname === "::1";
+  } catch {
+    // Not a parseable URL — treat it as suspect rather than trusting it.
+    return /localhost|127\.0\.0\.1/.test(url);
+  }
+}

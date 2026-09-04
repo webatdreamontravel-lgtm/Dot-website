@@ -60,7 +60,25 @@ enum BookingStatus {
   /// At least the advance is paid. Seats ARE counted.
   CONFIRMED
   CANCELLED
+  /// Everything paid has come back. Nothing retained.
   REFUNDED
+  /// Cancelled and settled, with a cancellation charge kept back — so the
+  /// customer got some of their money, not all of it. Distinct from REFUNDED
+  /// because "refunded" on a booking where ₹200 was retained is a claim the
+  /// customer will dispute, and distinct from CANCELLED because that says
+  /// nothing about whether the money was ever dealt with.
+  ///
+  /// The charge itself is not stored: it is amountPaidPaise - refundedPaise,
+  /// so it can never disagree with the refund rows it is derived from.
+  PARTIALLY_REFUNDED
+  /// Cancelled, and the money kept as travel credit for a future trip
+  /// instead of being sent back. Seats released, but nothing was refunded —
+  /// refundedPaise stays 0 and the cash never left, which is why this is not
+  /// a kind of REFUNDED.
+  ///
+  /// The credit itself lives in credit_entries; this status only records
+  /// what happened to the booking.
+  CARRIED_FORWARD
   /// Hold lapsed before payment. Seats released.
   EXPIRED
 }
@@ -73,11 +91,37 @@ enum PaymentStatus {
   REFUNDED
 }
 
+/// A refund's own lifecycle, distinct from the payment it came out of.
+/// Razorpay confirms a refund asynchronously, so PENDING is a real state
+/// the money sits in — not a transient one we can skip.
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+/// How money was sent back.
+///
+/// RAZORPAY is the only one that is asynchronous — everything else is money
+/// the team has already handed over by the time it is recorded, so those
+/// rows are born PROCESSED and never sit PENDING.
+enum RefundMethod {
+  RAZORPAY
+  CASH
+  UPI
+  BANK_TRANSFER
+  OTHER
+}
+
 enum PaymentMethod {
   RAZORPAY
   UPI_MANUAL
   CASH
   BANK_TRANSFER
+  /// Travel credit spent on this booking. Recorded as a payment so the
+  /// booking's paid total, balance, reminders and reports all work on it
+  /// unchanged — credit is a way of paying, not a parallel money system.
+  CREDIT
   OTHER
 }
 
@@ -99,6 +143,16 @@ enum EmailStatus {
   QUEUED
   SENT
   FAILED
+}
+
+/// What a credit_entries row does to a customer's balance.
+enum CreditKind {
+  /// Created by carrying a cancelled booking forward. Positive.
+  ISSUED
+  /// Spent against a new booking. Negative.
+  REDEEMED
+  /// A correction made by hand. Either sign.
+  ADJUSTED
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -132,7 +186,10 @@ model Profile {
   seatHolds        SeatHold[]
   reviews          Review[]
   recordedPayments Payment[]  @relation("RecordedBy")
+  initiatedRefunds Refund[]   @relation("RefundInitiatedBy")
   auditEntries     AuditLog[]
+  creditEntries    CreditEntry[] @relation("CreditOwner")
+  createdCredits   CreditEntry[] @relation("CreditCreatedBy")
 
   @@index([phone])
   @@index([role])
@@ -199,7 +256,7 @@ model Trip {
   // ── Behaviour toggles (the per-trip config) ──
   /// false => booking form records a REQUESTED booking and emails both
   /// sides instead of opening Razorpay. Same booking row either way.
-  razorpayEnabled   Boolean @default(false) @map("razorpay_enabled")
+  razorpayEnabled   Boolean @default(true) @map("razorpay_enabled")
   autoCloseWhenFull Boolean @default(true)  @map("auto_close_when_full")
   showSeatsLeft     Boolean @default(true)  @map("show_seats_left")
   waitlistEnabled   Boolean @default(false) @map("waitlist_enabled")
@@ -218,7 +275,15 @@ model Trip {
   cancellationPolicy Json? @map("cancellation_policy")
 
   // ── Publishing ──
+  /// Where the trip is in its editorial life: being written, finished,
+  /// or retired.
   status      TripStatus @default(DRAFT)
+  /// The master switch, and it outranks `status`. An inactive trip is
+  /// invisible on the site even when PUBLISHED — which is how a finished
+  /// trip gets pulled temporarily without being demoted back to DRAFT and
+  /// losing the distinction between "still being written" and "taken down".
+  /// A trip must be BOTH published and active to appear anywhere public.
+  isActive    Boolean    @default(true) @map("is_active")
   isFeatured  Boolean    @default(false) @map("is_featured")
   publishedAt DateTime?  @map("published_at") @db.Timestamptz(3)
 
@@ -233,6 +298,7 @@ model Trip {
   enquiries    Enquiry[]
 
   @@index([status, startDate])
+  @@index([isActive, status, startDate])
   @@index([category])
   @@index([isFeatured])
   @@map("trips")
@@ -319,11 +385,22 @@ model Booking {
 
   /// Mirrors the hold while status is PENDING_PAYMENT.
   holdExpiresAt DateTime? @map("hold_expires_at") @db.Timestamptz(3)
+  /// The hold this booking is standing on, until payment confirms it.
+  /// confirm_seat_hold() needs the id, and the seat_holds.booking_id link
+  /// can't be written before confirmation — that function requires it null.
+  /// Cleared once the seats are counted.
+  pendingHoldId String?   @map("pending_hold_id") @db.Uuid
 
   confirmedAt        DateTime? @map("confirmed_at") @db.Timestamptz(3)
   cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz(3)
   cancellationReason String?   @map("cancellation_reason")
   /// Admin-only. Never rendered to the customer.
+  /// Anything the customer wrote at checkout. Never written by the team —
+  /// their words are not ours to edit, and one shared column meant the
+  /// admin's own note silently overwrote theirs.
+  customerNotes      String?   @map("customer_notes")
+  /// The team's own notes, plus the warnings settlePayment and createOrder
+  /// stamp on a booking when something needs a human.
   internalNotes      String?   @map("internal_notes")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -335,8 +412,13 @@ model Booking {
   travellers  BookingTraveller[]
   instalments BookingInstalment[]
   payments    Payment[]
+  refunds     Refund[]
   seatHold    SeatHold?
   emails      EmailLog[]
+  /// Credit this booking generated when it was carried forward.
+  creditIssued  CreditEntry[] @relation("CreditSource")
+  /// Credit spent on this booking.
+  creditApplied CreditEntry[] @relation("CreditApplied")
 
   @@index([tripId, status])
   @@index([profileId, createdAt])
@@ -414,9 +496,20 @@ model Payment {
 
   method PaymentMethod
   status PaymentStatus @default(CREATED)
-  /// Always positive. Refunds are tracked via refundedPaise + status.
+  /// GROSS — what the customer was actually charged, including any
+  /// convenience fee. The part that counts toward the booking is
+  /// (amountPaise - convenienceFeePaise); never credit the gross, or an
+  /// online booking looks overpaid and the balance drifts.
   amountPaise Int    @map("amount_paise")
   currency    String @default("INR")
+
+  /// The payment-gateway fee passed on to the customer. Zero for cash, bank
+  /// transfer and anything the team collects by hand — those cost nothing to
+  /// process. Money in transit to Razorpay, not income.
+  convenienceFeePaise  Int  @default(0) @map("convenience_fee_paise")
+  /// Basis points, snapshotted at charge time. 236 = 2.36%. Changing the
+  /// rate later must not rewrite what an old payment charged.
+  convenienceFeeRateBp Int? @map("convenience_fee_rate_bp")
 
   // ── Razorpay correlation ──
   razorpayOrderId   String? @unique @map("razorpay_order_id")
@@ -438,10 +531,60 @@ model Payment {
   booking    Booking            @relation(fields: [bookingId], references: [id], onDelete: Restrict)
   instalment BookingInstalment? @relation(fields: [instalmentId], references: [id], onDelete: SetNull)
   recordedBy Profile?           @relation("RecordedBy", fields: [recordedByProfileId], references: [id], onDelete: SetNull)
+  refunds    Refund[]
 
   @@index([bookingId, createdAt])
   @@index([status, createdAt])
   @@map("payments")
+}
+
+/// Money going back out. APPEND ONLY, like payments.
+///
+/// A row per refund rather than a column on the payment, because a booking
+/// can be refunded in parts — cancel one traveller of four now, the rest
+/// later — and a single `razorpay_refund_id` column can only remember the
+/// most recent one. The history is the point: this is the record that
+/// answers "what did we actually send back, and when".
+///
+/// `bookingId` is denormalised alongside `paymentId` so the booking screen
+/// can total refunds without joining through payments.
+model Refund {
+  id        String @id @default(uuid()) @db.Uuid
+  paymentId String @map("payment_id") @db.Uuid
+  bookingId String @map("booking_id") @db.Uuid
+
+  /// Always positive. Direction is implied by the model, never by sign.
+  amountPaise Int          @map("amount_paise")
+  status      RefundStatus @default(PENDING)
+  /// How it went back. Defaults to RAZORPAY because every refund that
+  /// predates offline refunds was one.
+  method      RefundMethod @default(RAZORPAY)
+  /// UTR or receipt number for a refund the team made by hand.
+  externalReference String? @map("external_reference")
+
+  /// Set once Razorpay accepts the request. Unique so a replayed
+  /// refund.processed webhook can't create a second row.
+  razorpayRefundId String? @unique @map("razorpay_refund_id")
+
+  /// Shown to the customer. `notes` is internal.
+  reason String?
+  notes  String?
+
+  initiatedByProfileId String? @map("initiated_by_profile_id") @db.Uuid
+  failureReason        String? @map("failure_reason")
+
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  initiatedBy Profile? @relation("RefundInitiatedBy", fields: [initiatedByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, createdAt])
+  @@index([status, createdAt])
+  @@index([paymentId])
+  @@map("refunds")
 }
 
 /// Raw webhook receipts. The unique eventId is what makes webhook handling
@@ -552,6 +695,51 @@ model AuditLog {
 }
 
 /// Single-row key/value for things the founders can change without a deploy.
+/// Travel credit, as an append-only ledger.
+///
+/// A customer's balance is SUM(amountPaise) over their rows — never stored.
+/// A stored balance alongside a ledger is the worst bug in this category:
+/// when the two disagree there is no way to tell which one lied, and it is
+/// unfixable after the fact. The parts ARE the definition.
+///
+/// Amounts are SIGNED. Issuing adds, redeeming subtracts, and an adjustment
+/// can do either, so the balance is one aggregate with no special cases.
+///
+/// Rows are never updated or deleted. A mistake is corrected with an
+/// ADJUSTED row, so the history of what was promised and spent stays intact.
+model CreditEntry {
+  id   String     @id @default(uuid()) @db.Uuid
+  kind CreditKind
+
+  /// Whose credit. Deliberately never moves: credit is not transferable, so
+  /// there is no flow anywhere that changes this after creation.
+  profileId String @map("profile_id") @db.Uuid
+
+  /// SIGNED paise. + adds to the balance, - spends it.
+  amountPaise Int @map("amount_paise")
+
+  /// The cancelled booking this credit came out of.
+  sourceBookingId String? @map("source_booking_id") @db.Uuid
+  /// The booking it was spent on.
+  appliedBookingId String? @map("applied_booking_id") @db.Uuid
+
+  /// Shown to the customer on their credit history.
+  note String?
+
+  createdByProfileId String?  @map("created_by_profile_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  profile        Profile  @relation("CreditOwner", fields: [profileId], references: [id], onDelete: Cascade)
+  sourceBooking  Booking? @relation("CreditSource", fields: [sourceBookingId], references: [id], onDelete: SetNull)
+  appliedBooking Booking? @relation("CreditApplied", fields: [appliedBookingId], references: [id], onDelete: SetNull)
+  createdBy      Profile? @relation("CreditCreatedBy", fields: [createdByProfileId], references: [id], onDelete: SetNull)
+
+  @@index([profileId, createdAt])
+  @@index([sourceBookingId])
+  @@index([appliedBookingId])
+  @@map("credit_entries")
+}
+
 model SiteSetting {
   key       String   @id
   value     Json

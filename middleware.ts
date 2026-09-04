@@ -69,7 +69,17 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except static assets and image files.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    /**
+     * Everything except static assets, image files — and the machine-to-machine
+     * routes.
+     *
+     * Webhooks and cron carry no session cookie, so running this middleware on
+     * them buys nothing and costs a getUser() round trip to Supabase on every
+     * delivery. Razorpay counts that latency against us, and it would make a
+     * route that must keep working during an auth outage depend on auth being
+     * up. Both authenticate themselves — the webhook by HMAC, the cron by
+     * CRON_SECRET.
+     */
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

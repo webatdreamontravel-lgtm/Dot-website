@@ -5,7 +5,7 @@ import { ArrowLeft, Pencil } from "lucide-react";
 import { requireAdmin } from "@/lib/auth";
 import { getAdminTrip, getBookingsForTrip, rupees } from "@/lib/queries/admin";
 import { formatINR } from "@/lib/utils";
-import { BOOKING_TONE, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../../ui";
+import { BOOKING_TONE, bookingTone, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../../ui";
 import { FilterBar, FilterField, FilterSelect, filterInputClass } from "../../../FilterBar";
 import { Pagination } from "../../../Pagination";
 
@@ -37,8 +37,8 @@ export default async function TripBookingsPage({
     filters.q || filters.status || filters.payment || filters.source || filters.from || filters.to,
   );
 
-  // Totals come from an aggregate over every match, so they stay correct on
-  // page 2 — reducing the visible rows would report one page's worth of money.
+  // Trip-wide and filter-independent: these describe the trip, not whatever
+  // the table is currently showing.
   const { totals } = bookings;
   const action = `/admin/trips/${id}/bookings`;
 
@@ -86,33 +86,77 @@ export default async function TripBookingsPage({
         </div>
       </header>
 
-      {/* Seven figures: 4 + 3 on a wide screen keeps them all the same size
-          rather than squeezing seven into one thin row. */}
-      <div className="mb-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={hasFilters ? "Bookings matching" : "Bookings"} value={String(totals.count)} />
+      {/* The trip, and the one number to reconcile against a bank balance. */}
+      <div className="mb-3.5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+        <Stat label="Bookings" value={String(totals.count)} />
+        {/* The trip's own counter, not a sum over bookings. It is the number
+            reserve_seats() maintains and the one capacity is checked against,
+            so it is the only figure that can't disagree with what the trip
+            will actually sell — and it matches the "N of M booked" line in
+            the header above. */}
         <Stat
           label="Seats taken"
-          value={`${totals.seats}`}
+          value={`${trip.seatsBooked}`}
           sub={`of ${trip.totalSeats}`}
         />
+        {/* The figure to reconcile against a bank balance. "Collected" is
+            gross and keeps counting money already sent back, so a trip that
+            refunded half its bookings still reported the full amount taken. */}
         <Stat
-          label="Cancelled seats"
-          value={String(totals.cancelledSeats)}
-          sub={totals.cancelledSeats > 0 ? "released back to the trip" : undefined}
-          tone={totals.cancelledSeats > 0 ? "warn" : undefined}
+          label="Held"
+          value={formatINR(rupees(totals.netHeldPaise))}
+          sub={
+            totals.creditIssuedPaise > 0
+              ? `${formatINR(rupees(totals.collectedPaise))} in · ${formatINR(
+                  rupees(totals.refundedPaise),
+                )} back · ${formatINR(rupees(totals.creditIssuedPaise))} to credit`
+              : totals.refundedPaise > 0
+                ? `${formatINR(rupees(totals.collectedPaise))} in · ${formatINR(
+                    rupees(totals.refundedPaise),
+                  )} back`
+                : "collected, net of refunds"
+          }
+          tone="ok"
         />
-        <Stat label="Collected" value={formatINR(rupees(totals.collectedPaise))} tone="ok" />
+      </div>
+
+      {/* Where that money actually sits, and what is owed each way. */}
+      <div className="mb-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+        {/* The two halves of Held, in their own boxes.
+            A cancellation charge is not trip income — it is money kept from
+            someone who isn't coming — and one card reporting both made a trip
+            whose only remaining money was a ₹1,999 charge look funded. */}
         <Stat
-          label="To refund"
-          value={formatINR(rupees(totals.toRefundPaise))}
-          sub={totals.toRefundPaise > 0 ? "held on cancelled bookings" : undefined}
-          tone={totals.toRefundPaise > 0 ? "warn" : undefined}
+          label="From travelling seats"
+          value={formatINR(rupees(totals.liveHeldPaise))}
+          sub="money for people still going"
+          tone="ok"
         />
-        <Stat label="Refunded" value={formatINR(rupees(totals.refundedPaise))} />
         <Stat
-          label="Outstanding"
+          label="Kept from cancellations"
+          value={formatINR(rupees(totals.retainedPaise))}
+          sub={
+            totals.retainedPaise > 0
+              ? "cancellation charges, not trip income"
+              : totals.retainedPaise < 0
+                ? "more went back than these bookings took"
+                : "nothing kept"
+          }
+          tone={totals.retainedPaise !== 0 ? "warn" : undefined}
+        />
+        <Stat
+          label="Owed to us"
           value={formatINR(rupees(totals.outstandingPaise))}
+          sub={totals.outstandingPaise > 0 ? "unpaid balances" : undefined}
           tone={totals.outstandingPaise > 0 ? "warn" : undefined}
+        />
+        {/* Both directions of "we owe them": money stuck on cancelled
+            bookings, and live bookings paid past what they now cost. */}
+        <Stat
+          label="Owed to them"
+          value={formatINR(rupees(totals.toRefundPaise))}
+          sub={totals.toRefundPaise > 0 ? "cancellations and overpayments" : undefined}
+          tone={totals.toRefundPaise > 0 ? "warn" : undefined}
         />
       </div>
 
@@ -137,7 +181,7 @@ export default async function TripBookingsPage({
                   <table className="w-full border-collapse">
                     <thead>
                       <tr>
-                        {["Ref", "Customer", "Travellers", "Status", "Seats", "Total", "Paid", "Balance", "Payment", "Source", "Booked"].map((h) => (
+                        {["Ref", "Customer", "Travellers", "Status", "Seats", "Total", "Held", "Balance", "Payment", "Source", "Booked"].map((h) => (
                           <th
                             key={h}
                             className="whitespace-nowrap border-b border-[#e3e7ee] bg-[#fbfcfe] px-4 py-2.5 text-left text-[0.72rem] font-semibold uppercase tracking-[0.09em] text-[#8b96ad]"
@@ -149,7 +193,7 @@ export default async function TripBookingsPage({
                     </thead>
                     <tbody>
                       {bookings.rows.map((b) => {
-                        const status = BOOKING_TONE[b.status] ?? { tone: "mute", label: b.status };
+                        const status = bookingTone(b);
                         const pay = PAYMENT_TONE[b.paymentState];
                         return (
                           <tr key={b.id} className="hover:bg-[#fafbfd]">
@@ -183,11 +227,50 @@ export default async function TripBookingsPage({
                             <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums">
                               {formatINR(rupees(b.totalPaise))}
                             </td>
-                            <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums text-[#0f8a5f]">
-                              {formatINR(rupees(b.amountPaidPaise))}
+                            {/* Net, not gross: what this booking is actually
+                                holding. The refund is spelled out underneath
+                                so the arithmetic is visible rather than
+                                mysterious. */}
+                            <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 tabular-nums">
+                              <span className="font-display text-[0.95rem] font-semibold text-[#0f8a5f]">
+                                {formatINR(rupees(b.netHeldPaise))}
+                              </span>
+                              {(b.refundedPaise > 0 || b.creditIssuedPaise > 0) && (
+                                <span className="mt-0.5 block text-[0.72rem] font-normal text-[#8b96ad]">
+                                  {formatINR(rupees(b.amountPaidPaise))}
+                                  {b.refundedPaise > 0 && ` − ${formatINR(rupees(b.refundedPaise))}`}
+                                  {b.creditIssuedPaise > 0 && ` − ${formatINR(rupees(b.creditIssuedPaise))} credit`}
+                                </span>
+                              )}
                             </td>
-                            <td className={`whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums ${b.balancePaise > 0 ? "text-[#b26a00]" : "text-[#8b96ad]"}`}>
-                              {b.balancePaise > 0 ? formatINR(rupees(b.balancePaise)) : "—"}
+                            {/* One column, both directions. An overpaid
+                                booking used to show "—" here, which is how
+                                ₹100 owed to a customer stays invisible. */}
+                            <td
+                              className={`whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 tabular-nums ${
+                                b.overpaidPaise > 0
+                                  ? "text-[#b26a00]"
+                                  : b.balancePaise > 0
+                                    ? "text-[#b26a00]"
+                                    : "text-[#8b96ad]"
+                              }`}
+                            >
+                              {b.overpaidPaise > 0 ? (
+                                <>
+                                  <span className="font-display text-[0.95rem] font-semibold">
+                                    {formatINR(rupees(b.overpaidPaise))}
+                                  </span>
+                                  <span className="mt-0.5 block text-[0.72rem] font-normal">
+                                    to refund
+                                  </span>
+                                </>
+                              ) : b.balancePaise > 0 ? (
+                                <span className="font-display text-[0.95rem] font-semibold">
+                                  {formatINR(rupees(b.balancePaise))}
+                                </span>
+                              ) : (
+                                "—"
+                              )}
                             </td>
                             <td className="border-b border-[#eef1f6] px-4 py-3"><Chip tone={pay.tone}>{pay.label}</Chip></td>
                             <td className="border-b border-[#eef1f6] px-4 py-3"><Chip tone="mute">{b.source}</Chip></td>

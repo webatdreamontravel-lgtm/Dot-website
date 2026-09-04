@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { getSessionProfile } from "@/lib/auth";
-import { buildReference, computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { nextBookingReference } from "@/lib/booking/reference";
 import { prisma } from "@/lib/prisma";
+import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type BookingResult =
   | { ok: true; reference: string }
@@ -26,10 +28,10 @@ const travellerSchema = z.object({
     .min(1, "Phone number is required")
     // Deliberately loose on formatting and strict on substance: +91, spaces
     // and dashes are all fine, but there must be a real number in there.
-    .refine((v) => {
-      const digits = v.replace(/\D/g, "");
-      return digits.length >= 10 && digits.length <= 15;
-    }, "Enter a valid phone number"),
+    .refine(isValidPhone, "Enter a 10-digit mobile number")
+    // Stored as ten national digits, so the same number can never arrive
+    // as three different strings.
+    .transform(toNationalDigits),
   email: z.string().trim().min(1, "Email is required").email("Enter a valid email address").max(160),
 });
 
@@ -107,7 +109,7 @@ export async function createBookingRequest(
   }
 
   const trip = await prisma.trip.findFirst({
-    where: { slug: data.slug, status: "PUBLISHED", deletedAt: null, endDate: { gte: new Date() } },
+    where: { slug: data.slug, status: "PUBLISHED", isActive: true, deletedAt: null, endDate: { gte: new Date() } },
     select: {
       id: true, slug: true, title: true, startDate: true,
       pricePaise: true, gstPercent: true, tcsPercent: true, advancePaise: true,
@@ -127,10 +129,11 @@ export async function createBookingRequest(
       const [{ reserve_seats: holdId }] = await tx.$queryRaw<{ reserve_seats: string }[]>`
         SELECT reserve_seats(${trip.id}::uuid, ${profile.id}::uuid, ${data.seats}::int, 15::int)`;
 
-      // Safe to count inside the lock: no other booking for this trip can
-      // commit until this transaction ends, so the sequence can't collide.
-      const sequence = (await tx.booking.count({ where: { tripId: trip.id } })) + 1;
-      const ref = buildReference(trip.slug, trip.startDate, sequence);
+      // Inside the trip lock, so no concurrent booking can read the same
+      // maximum. Derived from the highest existing reference rather than a
+      // row count: a gap in the sequence makes a count collide with a
+      // reference that is already taken.
+      const ref = await nextBookingReference(tx, trip);
 
       const booking = await tx.booking.create({
         data: {
@@ -148,7 +151,8 @@ export async function createBookingRequest(
           tcsPaise: price.tcsPaise,
           totalPaise: price.totalPaise,
           amountPaidPaise: 0,
-          internalNotes: data.notes || null,
+          // The customer's words, kept where the team can't overwrite them.
+          customerNotes: data.notes || null,
           travellers: {
             create: data.travellers.map((t, i) => ({
               fullName: t.fullName,

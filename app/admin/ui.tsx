@@ -1,3 +1,4 @@
+import { checkoutInFlight } from "@/lib/booking/lifecycle";
 import { cn } from "@/lib/utils";
 
 /** Shared chrome for admin screens. Plain, dense, unbranded on purpose —
@@ -62,9 +63,29 @@ export const BOOKING_TONE: Record<string, { tone: string; label: string }> = {
   REQUESTED: { tone: "info", label: "Request" },
   PENDING_PAYMENT: { tone: "warn", label: "Pending payment" },
   CANCELLED: { tone: "bad", label: "Cancelled" },
-  REFUNDED: { tone: "mute", label: "Refunded" },
+  REFUNDED: { tone: "mute", label: "Refunded in full" },
+  PARTIALLY_REFUNDED: { tone: "mute", label: "Partly refunded" },
+  CARRIED_FORWARD: { tone: "info", label: "Carried forward" },
   EXPIRED: { tone: "mute", label: "Expired" },
 };
+
+/**
+ * The chip for one booking, which is not always its stored status.
+ *
+ * A booking whose hold is still running has a customer in the Razorpay
+ * window this second. "Pending payment" reads like something to chase;
+ * "Paying now" reads like something to leave alone, which is what it is.
+ * Nothing else about the booking changes — see checkoutInFlight().
+ *
+ * BOOKING_TONE stays keyed on the raw status because the filter dropdowns
+ * are built from it, and you filter by what is stored.
+ */
+export function bookingTone(booking: { status: string; holdExpiresAt?: Date | null }) {
+  if (checkoutInFlight({ status: booking.status, holdExpiresAt: booking.holdExpiresAt ?? null })) {
+    return { tone: "info", label: "Paying now" };
+  }
+  return BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
+}
 
 export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
   PAID: { tone: "ok", label: "Paid in full" },
@@ -73,17 +94,16 @@ export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
 };
 
 /**
- * Trip status, in the words the row menu uses.
+ * Where a trip is in its editorial life.
  *
- * These read Active/Inactive rather than Live/Draft so the badge, the
- * Status filter and the Activate/Deactivate action all describe the same
- * thing the same way. "Inactive" covers a trip still being written and one
- * deliberately taken down — from the site's point of view they are
- * identical, and the distinction was never actionable here.
+ * Distinct from `isActive`, which is the master on/off switch and outranks
+ * this. A trip must be BOTH live and active to appear on the site — so a
+ * finished trip can be pulled temporarily without being demoted back to
+ * Draft and losing the fact that it was ever finished.
  */
 export const TRIP_TONE: Record<string, { tone: string; label: string }> = {
-  PUBLISHED: { tone: "ok", label: "Active" },
-  DRAFT: { tone: "warn", label: "Inactive" },
+  PUBLISHED: { tone: "ok", label: "Live on site" },
+  DRAFT: { tone: "warn", label: "Draft" },
   ARCHIVED: { tone: "mute", label: "Archived" },
 };
 

@@ -25,9 +25,7 @@ export function AuthShell({
 }) {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-cream px-4 py-12 md:py-16">
-      <Link href="/" className="mb-7" aria-label="Dream On Travel home">
-        <Logo variant="dark" />
-      </Link>
+      <Logo variant="dark" className="mb-7" />
 
       <div
         className={

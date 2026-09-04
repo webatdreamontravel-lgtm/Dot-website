@@ -11,7 +11,8 @@ import {
   type CustomerStats,
 } from "@/lib/queries/admin";
 import { formatINR } from "@/lib/utils";
-import { BOOKING_TONE, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../ui";
+import { creditBalance, creditHistory, type CreditEntryRow } from "@/lib/credit/ledger";
+import { BOOKING_TONE, bookingTone, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../ui";
 import { FilterBar, FilterField, FilterSelect, filterInputClass } from "../../FilterBar";
 import { Pagination } from "../../Pagination";
 import { Tabs } from "../../Tabs";
@@ -29,6 +30,7 @@ const METHOD_LABEL: Record<string, string> = {
   BANK_TRANSFER: "Bank transfer",
   RAZORPAY: "Razorpay",
   OTHER: "Other",
+  CREDIT: "Travel credit",
 };
 
 export default async function AdminCustomerPage({
@@ -45,8 +47,13 @@ export default async function AdminCustomerPage({
   const customer = await getAdminCustomer(id);
   if (!customer) notFound();
 
-  const stats = await getCustomerStats(id);
-  const tab = filters.tab === "bookings" ? "bookings" : "overview";
+  const [stats, credit, creditEntries] = await Promise.all([
+    getCustomerStats(id),
+    creditBalance(id),
+    creditHistory(id),
+  ]);
+  const tab =
+    filters.tab === "bookings" ? "bookings" : filters.tab === "credit" ? "credit" : "overview";
   const base = `/admin/customers/${id}`;
 
   return (
@@ -85,11 +92,18 @@ export default async function AdminCustomerPage({
         tabs={[
           { key: "overview", label: "Overview" },
           { key: "bookings", label: "Bookings", count: stats.bookings },
+          // Only when there is history to show. A permanently empty tab on
+          // every customer teaches people to stop looking at it.
+          ...(creditEntries.length > 0
+            ? [{ key: "credit", label: "Travel credit", count: creditEntries.length }]
+            : []),
         ]}
       />
 
       {tab === "overview" ? (
-        <Overview customer={customer} stats={stats} base={base} />
+        <Overview customer={customer} stats={stats} base={base} creditPaise={credit} />
+      ) : tab === "credit" ? (
+        <CreditTab balancePaise={credit} entries={creditEntries} />
       ) : (
         <BookingsTab customerId={id} filters={filters} base={base} />
       )}
@@ -101,9 +115,11 @@ async function Overview({
   customer,
   stats,
   base,
+  creditPaise,
 }: {
   customer: NonNullable<Awaited<ReturnType<typeof getAdminCustomer>>>;
   stats: CustomerStats;
+  creditPaise: number;
   base: string;
 }) {
   const age = customer.dateOfBirth ? yearsSince(customer.dateOfBirth) : null;
@@ -163,6 +179,30 @@ async function Overview({
             />
           </dl>
         </Panel>
+
+        {/* On the overview, not only behind the tab. Credit that nobody
+            notices never gets spent — and the moment it matters is when the
+            team has this customer on the phone about a new trip. */}
+        {creditPaise > 0 && (
+          <Panel title="Travel credit">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+              <div>
+                <div className="font-display text-[1.6rem] font-semibold tabular-nums text-[#0f8a5f]">
+                  {formatINR(rupees(creditPaise))}
+                </div>
+                <p className="mt-0.5 text-[0.8rem] text-[#8b96ad]">
+                  available to put towards a future trip
+                </p>
+              </div>
+              <Link
+                href={`${base}?tab=credit`}
+                className="rounded-lg border border-[#e3e7ee] px-3.5 py-2 text-[0.83rem] font-medium text-[#16203a] hover:bg-[#f6f7f9]"
+              >
+                History
+              </Link>
+            </div>
+          </Panel>
+        )}
 
         <Panel title="How they've paid">
           {stats.methods.length === 0 ? (
@@ -261,7 +301,7 @@ async function BookingsTab({
                   </thead>
                   <tbody>
                     {rows.map((b) => {
-                      const status = BOOKING_TONE[b.status] ?? { tone: "mute", label: b.status };
+                      const status = bookingTone(b);
                       const pay = PAYMENT_TONE[b.paymentState];
                       return (
                         <tr key={b.id} className="hover:bg-[#fafbfd]">
@@ -399,6 +439,161 @@ function Stat({
         {value}
       </div>
       {sub && <div className="text-[0.78rem] text-[#8b96ad]">{sub}</div>}
+    </div>
+  );
+}
+
+
+/**
+ * Pairs each entry with the balance immediately after it.
+ *
+ * Accumulates oldest-first then flips back, because a running balance only
+ * means anything read forwards — while the table itself reads newest-first,
+ * which is the order someone scans when they are looking for the last thing
+ * that happened.
+ *
+ * A module-level function rather than inline: an accumulator reassigned
+ * inside a component body is exactly the pattern the React compiler warns
+ * about, and the calculation has nothing to do with rendering anyway.
+ */
+function withRunningBalance(entries: CreditEntryRow[]) {
+  const out: { entry: CreditEntryRow; balanceAfter: number }[] = [];
+  let running = 0;
+  for (const entry of [...entries].reverse()) {
+    running += entry.amountPaise;
+    out.push({ entry, balanceAfter: running });
+  }
+  return out.reverse();
+}
+
+const CREDIT_KIND: Record<string, { label: string; tone: string }> = {
+  ISSUED: { label: "Credited", tone: "info" },
+  REDEEMED: { label: "Used", tone: "ok" },
+  ADJUSTED: { label: "Adjusted", tone: "mute" },
+};
+
+/**
+ * The full credit history for one customer.
+ *
+ * A running balance is shown down the right-hand side, computed from the
+ * oldest entry forward. It is the column the team will actually read: the
+ * question on a phone call is rarely "what is the balance now" — it is "was
+ * there ₹4,000 in March", asked because a customer remembers a number and
+ * the team needs to see where it went.
+ *
+ * The balance in the header is a plain SUM of the same rows, so the two can
+ * never disagree — the last running figure and the header are the same
+ * arithmetic done in two directions.
+ */
+function CreditTab({
+  balancePaise,
+  entries,
+}: {
+  balancePaise: number;
+  entries: CreditEntryRow[];
+}) {
+  const withRunning = withRunningBalance(entries);
+
+  const issued = entries.filter((e) => e.amountPaise > 0).reduce((n, e) => n + e.amountPaise, 0);
+  const used = entries.filter((e) => e.amountPaise < 0).reduce((n, e) => n - e.amountPaise, 0);
+
+  return (
+    <>
+      <div className="mb-5 grid gap-3.5 sm:grid-cols-3">
+        <CreditStat label="Available now" value={formatINR(rupees(balancePaise))} tone="ok" />
+        <CreditStat label="Credited in total" value={formatINR(rupees(issued))} />
+        <CreditStat label="Used" value={formatINR(rupees(used))} />
+      </div>
+
+      <Panel title="History">
+        {entries.length === 0 ? (
+          <EmptyState
+            title="No travel credit yet"
+            body="Carrying a cancelled booking forward from its booking screen is what creates it."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] border-collapse text-left">
+              <thead>
+                <tr className="bg-[#fbfcfd]">
+                  {["Date", "What happened", "Booking", "Amount", "Balance after"].map((h) => (
+                    <th
+                      key={h}
+                      className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-2.5 text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[#8b96ad]"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {withRunning.map(({ entry: e, balanceAfter }) => {
+                  const kind = CREDIT_KIND[e.kind] ?? { label: e.kind, tone: "mute" };
+                  const booking = e.sourceBooking ?? e.appliedBooking;
+                  return (
+                    <tr key={e.id}>
+                      <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 text-[0.83rem] text-[#5a6785]">
+                        {e.createdAt.toLocaleDateString("en-IN", {
+                          day: "numeric", month: "short", year: "numeric",
+                        })}
+                      </td>
+                      <td className="border-b border-[#eef1f6] px-4 py-3">
+                        <Chip tone={kind.tone}>{kind.label}</Chip>
+                        {e.note && (
+                          <span className="mt-1 block text-[0.78rem] text-[#8b96ad]">{e.note}</span>
+                        )}
+                      </td>
+                      <td className="border-b border-[#eef1f6] px-4 py-3 text-[0.83rem]">
+                        {booking ? (
+                          <Link
+                            href={`/admin/bookings/${booking.reference}`}
+                            className="text-[#5a6785] hover:text-teal"
+                          >
+                            {booking.reference}
+                            <span className="block text-[0.78rem] text-[#8b96ad]">
+                              {booking.trip.title}
+                            </span>
+                          </Link>
+                        ) : (
+                          <span className="text-[#8b96ad]">—</span>
+                        )}
+                      </td>
+                      <td
+                        className={`whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums ${
+                          e.amountPaise > 0 ? "text-[#0f8a5f]" : "text-[#16203a]"
+                        }`}
+                      >
+                        {e.amountPaise > 0 ? "+" : "−"}
+                        {formatINR(rupees(Math.abs(e.amountPaise)))}
+                      </td>
+                      <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 text-[0.85rem] tabular-nums text-[#5a6785]">
+                        {formatINR(rupees(balanceAfter))}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function CreditStat({ label, value, tone }: { label: string; value: string; tone?: "ok" }) {
+  return (
+    <div className="rounded-[14px] border border-[#e3e7ee] bg-white p-[15px_18px] shadow-sm">
+      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#8b96ad]">
+        {label}
+      </div>
+      <div
+        className={`mt-1.5 font-display text-[1.5rem] font-semibold tabular-nums ${
+          tone === "ok" ? "text-[#0f8a5f]" : ""
+        }`}
+      >
+        {value}
+      </div>
     </div>
   );
 }

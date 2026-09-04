@@ -15,15 +15,25 @@ const supabaseHostname = (() => {
 })();
 
 const nextConfig: NextConfig = {
+  output: "standalone",
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "15mb",
+    },
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com" },
       { protocol: "https", hostname: "i.pravatar.cc" },
-      // Trip photos uploaded through the admin.
       {
         protocol: "https",
         hostname: supabaseHostname,
         pathname: "/storage/v1/object/public/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.amazonaws.com",
+        pathname: "/**",
       },
     ],
 
