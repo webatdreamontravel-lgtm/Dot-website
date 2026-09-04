@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/auth";
 import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { amountOutstanding } from "@/lib/booking/balance";
 import { seatsCounted } from "@/lib/booking/seats";
 import {
   checkoutInFlight,
@@ -152,6 +153,9 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         select: {
           id: true, reference: true, profileId: true,
           status: true, holdExpiresAt: true, totalPaise: true, amountPaidPaise: true,
+          // Needed to measure what is owed the same way every screen does.
+          refundedPaise: true,
+          creditIssued: { select: { amountPaise: true } },
           trip: { select: { id: true, slug: true } },
         },
       });
@@ -171,7 +175,24 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
        * A booking that genuinely needs more paid should be repriced first;
        * the balance then exists and this passes.
        */
-      const owedPaise = booking.totalPaise - booking.amountPaidPaise;
+      /**
+       * Measured with amountOutstanding(), the same function the panel, the
+       * customer's page and the pay-balance action all use.
+       *
+       * This was `total - paid`, which ignores refunds — so a booking that
+       * paid ₹10,700 and had ₹5,000 sent back owed ₹5,000 everywhere on
+       * screen and ₹0 here. The form offered "Fill the full balance
+       * (₹5,000)" and the server answered "already paid in full", with no
+       * way through: the money had genuinely gone back and genuinely needed
+       * collecting again.
+       */
+      const owedPaise = amountOutstanding({
+        status: booking.status,
+        totalPaise: booking.totalPaise,
+        amountPaidPaise: booking.amountPaidPaise,
+        refundedPaise: booking.refundedPaise,
+        creditIssuedPaise: booking.creditIssued.reduce((n, c) => n + c.amountPaise, 0),
+      });
       if (owedPaise <= 0) {
         throw new Error("SAFE:This booking is already paid in full.");
       }

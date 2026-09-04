@@ -61,14 +61,27 @@ export function BookingCard({
     booking.creditIssued?.reduce((n, c) => n + c.amountPaise, 0) ?? 0;
   const status = customerStatus({ ...booking, creditIssuedPaise: carriedForwardPaise });
 
-  const balance = amountOutstanding(booking);
+  const balance = amountOutstanding({ ...booking, creditIssuedPaise: carriedForwardPaise });
   const active = ["CONFIRMED", "REQUESTED"].includes(booking.status);
   const canPay = canPayBalanceOnline(booking);
   // Owed money on a booking nobody can pay online yet. The card must say why
   // rather than leaving a bare figure with no action beside it.
   const awaitingTeam = active && !canPay && balance > 0 && Boolean(status.note);
+  /**
+   * What the booking is holding right now — not what was handed over.
+   *
+   * The caption read `amountPaidPaise of totalPaise`, which sat directly
+   * under its own contradiction: "Still to pay ₹7,200" above
+   * "₹10,700 of ₹10,700 paid", bar full. Gross paid answers a
+   * different question from the headline, so the two disagreed by exactly
+   * the money that had gone back out.
+   */
+  const heldPaise = Math.max(
+    booking.amountPaidPaise - booking.refundedPaise - carriedForwardPaise,
+    0,
+  );
   const paidPct = booking.totalPaise > 0
-    ? Math.round((booking.amountPaidPaise / booking.totalPaise) * 100)
+    ? Math.min(100, Math.round((heldPaise / booking.totalPaise) * 100))
     : 0;
 
   return (
@@ -148,10 +161,10 @@ export function BookingCard({
                   {formatINR(toRupees(balance))}
                 </p>
                 <p className="mt-1.5 text-[0.78rem] text-navy/45">
-                  {formatINR(toRupees(booking.amountPaidPaise))} of{" "}
+                  {formatINR(toRupees(heldPaise))} of{" "}
                   {formatINR(toRupees(booking.totalPaise))} paid
                 </p>
-                {booking.amountPaidPaise > 0 && (
+                {heldPaise > 0 && (
                   <div
                     className="mt-2 h-1 w-full max-w-[200px] overflow-hidden rounded-full bg-navy/10"
                     role="img"
