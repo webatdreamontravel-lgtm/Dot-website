@@ -86,7 +86,10 @@ export default async function AdminDashboard() {
               return (
                 <Link
                   key={t.id}
-                  href={`/admin/trips/${t.id}`}
+                  // Straight to this trip's bookings, not its edit form. The
+                  // question this list raises is "who is on it / who still
+                  // owes" — the seat count is what prompted the click.
+                  href={`/admin/trips/${t.id}/bookings`}
                   className="flex items-center gap-3.5 border-b border-[#eef1f6] py-3 last:border-0 hover:bg-[#fafbfd]"
                 >
                   <div className="min-w-0 flex-1">

@@ -53,16 +53,37 @@ export function ResendCodeButton({
     return () => clearInterval(id);
   }, [restart, tick]);
 
+  /**
+   * Restart the cooldown when a send FINISHES, never from onClick.
+   *
+   * Restarting in the click handler made `waiting` true, which made the button
+   * disabled — and React flushes state from discrete events synchronously,
+   * before the browser performs the button's default action. A disabled button
+   * has no activation behaviour, so the form submission was dropped and the
+   * whole thing silently did nothing but reset its own timer.
+   *
+   * Watching `pending` fall keeps the same guarantee the old comment claimed:
+   * the cooldown applies whether the send succeeded or failed, because the
+   * flag falls either way. In-flight, `pending` is what disables the button.
+   */
+  const wasPending = useRef(false);
+  useEffect(() => {
+    if (pending) {
+      wasPending.current = true;
+      return;
+    }
+    if (wasPending.current) {
+      wasPending.current = false;
+      restart();
+    }
+  }, [pending, restart]);
+
   const waiting = remaining > 0;
 
   return (
     <button
       type="submit"
       disabled={waiting || pending}
-      // Restart on click rather than on the action resolving: the cooldown is
-      // about how often a send is *requested*, and a failed send should not
-      // hand back an instant retry.
-      onClick={restart}
       aria-live="polite"
       className={className}
     >

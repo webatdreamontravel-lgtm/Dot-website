@@ -3,6 +3,11 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { razorpay } from "@/lib/payments/client";
 import { notifyRefundOutcome } from "@/lib/booking/notify";
+import {
+  committedGatewayRefundPaise,
+  committedRefundPaise,
+  pendingRefundPaise,
+} from "@/lib/booking/refunds";
 
 export type RefundResult =
   | { ok: true; refundId: string; amountPaise: number }
@@ -47,14 +52,35 @@ export async function requestRefund(input: {
         orderBy: { capturedAt: "desc" },
         select: { id: true, razorpayPaymentId: true, amountPaise: true },
       },
-      refunds: {
-        where: { status: { not: "FAILED" } },
-        select: { amountPaise: true, method: true },
-      },
+      // Every row, status included: which ones tie money up is decided by
+      // committedRefundPaise, in one place, not by a where-clause here.
+      refunds: { select: { amountPaise: true, method: true, status: true } },
     },
   });
 
   if (!booking) return { ok: false, error: "That booking no longer exists." };
+
+  /**
+   * One refund at a time.
+   *
+   * A PENDING refund is a question we do not yet know the answer to — it may
+   * land, or Razorpay may refuse it and hand the money back. Raising a second
+   * one against the same booking means two open questions and a ceiling
+   * computed from a guess, which is how a booking ends up owing more than it
+   * ever took: five stacked pending refunds against one payment.
+   *
+   * Wait for the webhook. If it never comes, reconcile the stuck refund
+   * against Razorpay rather than starting another.
+   */
+  const inFlightPaise = pendingRefundPaise(booking.refunds);
+  if (inFlightPaise > 0) {
+    return {
+      ok: false,
+      error:
+        `A refund of ₹${(inFlightPaise / 100).toLocaleString("en-IN")} is already on its way ` +
+        `back through Razorpay. Wait for it to land before starting another.`,
+    };
+  }
 
   /**
    * The ceiling is what RAZORPAY holds, not what the booking was paid.
@@ -85,11 +111,11 @@ export async function requestRefund(input: {
    * holding money. Everything non-failed still counts toward `held` below —
    * the two limits are genuinely different quantities.
    */
-  const gatewayRefunded = booking.refunds
-    .filter((r) => r.method === "RAZORPAY")
-    .reduce((n, r) => n + r.amountPaise, 0);
-  const allRefunded = booking.refunds.reduce((n, r) => n + r.amountPaise, 0);
-  const heldPaise = booking.amountPaidPaise - allRefunded;
+  const gatewayRefunded = committedGatewayRefundPaise(booking.refunds);
+  // FAILED refunds are excluded from both: Razorpay refused them, so the
+  // money never left and is available again. This counted them, which meant
+  // a permanently failed refund quietly shrank the ceiling for ever.
+  const heldPaise = booking.amountPaidPaise - committedRefundPaise(booking.refunds);
 
   const refundable = Math.min(gatewayPaidPaise - gatewayRefunded, heldPaise);
 

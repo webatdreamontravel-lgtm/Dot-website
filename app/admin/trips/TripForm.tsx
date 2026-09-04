@@ -368,14 +368,24 @@ export function TripForm({
               <b className="block text-[0.89rem] font-semibold">Status</b>
               <small className="mt-0.5 block text-[0.8rem] text-[#8b96ad]">
                 Where this trip is in its life. Drafts are invisible; publishing puts it on the
-                homepage and makes it bookable. Separately, the Active switch in the trips list
-                can pull a live trip off the site without demoting it back to Draft.
+                homepage and makes it bookable. To take a live trip off the site, use the Active
+                switch in the trips list rather than changing it here.
               </small>
             </div>
             <select name="status" defaultValue={values.status ?? "DRAFT"} className={cn(input, "w-auto")}>
               <option value="DRAFT">Draft</option>
               <option value="PUBLISHED">Live on site</option>
-              <option value="ARCHIVED">Archived</option>
+              {/*
+                Archived is no longer something you pick — it is what the
+                Active switch in the trips list leaves behind when a trip is
+                turned off (see setTripActive).
+
+                It still has to appear on a trip that IS archived. A select
+                whose defaultValue matches no option silently falls back to
+                the first one, so without this, opening an archived trip and
+                saving anything would quietly demote it to Draft.
+              */}
+              {values.status === "ARCHIVED" && <option value="ARCHIVED">Archived</option>}
             </select>
           </div>
         </div>

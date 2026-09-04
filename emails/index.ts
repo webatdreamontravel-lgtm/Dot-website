@@ -14,6 +14,7 @@ export { sendEmail, type SendResult } from "./send";
 
 export { verificationEmail } from "./verification";
 export { passwordResetEmail } from "./passwordReset";
+export { signInCodeEmail } from "./signInCode";
 export { bookingConfirmedEmail } from "./bookingConfirmed";
 export { balanceReminderEmail } from "./balanceReminder";
 export { paymentReceivedEmail } from "./paymentReceived";
@@ -21,6 +22,7 @@ export { bookingCancelledEmail } from "./bookingCancelled";
 export { creditIssuedEmail } from "./creditIssued";
 export { refundProcessedEmail } from "./refundProcessed";
 export { refundFailedAdminEmail } from "./refundFailedAdmin";
+export { refundProcessedAdminEmail } from "./refundProcessedAdmin";
 export { seatUnavailableEmail } from "./seatUnavailable";
 export { seatUnavailableAdminEmail } from "./seatUnavailableAdmin";
 

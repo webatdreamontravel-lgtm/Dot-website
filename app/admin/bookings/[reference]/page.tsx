@@ -3,6 +3,13 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { requireAdmin } from "@/lib/auth";
+import { statusSettled } from "@/lib/booking/lifecycle";
+import {
+  committedGatewayRefundPaise,
+  committedRefundPaise,
+  pendingRefundPaise,
+} from "@/lib/booking/refunds";
+import { creditBalance } from "@/lib/credit/ledger";
 import { getAdminBooking, rupees } from "@/lib/queries/admin";
 import { formatDateRange, formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, PAYMENT_TONE, Panel } from "../../ui";
@@ -45,6 +52,15 @@ export default async function AdminBookingPage({
   const { reference } = await params;
   const booking = await getAdminBooking(decodeURIComponent(reference));
   if (!booking) notFound();
+
+  /**
+   * What this customer holds in travel credit, across every booking.
+   *
+   * Read here rather than inside the payment panel because the panel is a
+   * client component: the balance is a SUM over the ledger and belongs on
+   * the server, the same way the new-booking form gets it.
+   */
+  const creditAvailablePaise = await creditBalance(booking.profile.id);
 
   const status = BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
   /**
@@ -102,13 +118,27 @@ export default async function AdminBookingPage({
   const netHeldPaise = booking.amountPaidPaise - booking.refundedPaise - creditIssuedPaise;
 
   /**
+   * What can still be promised out — which is NOT what is still held.
+   *
+   * `netHeldPaise` counts only refunds that have PROCESSED, because that is
+   * what "we still have their money" means. But a PENDING refund is already
+   * spoken for: Razorpay has been asked and will send it. Offering it again
+   * — in either refund box — hands the same rupees back twice.
+   *
+   * This is what both ceilings below are measured from. The held figure keeps
+   * its own meaning for the balance, the overpayment and the stat cards.
+   */
+  const pendingRefundsPaise = pendingRefundPaise(booking.refunds);
+  const refundableHeldPaise = Math.max(netHeldPaise - pendingRefundsPaise, 0);
+
+  /**
    * A closed booking owes nothing in either direction.
    *
    * Without this, a carried-forward booking holding a ₹200 cancellation
    * charge against a ₹4,200 trip reports a ₹4,000 balance — money nobody
    * owes on a trip nobody is going on.
    */
-  const settled = !["PENDING_PAYMENT", "REQUESTED", "CONFIRMED"].includes(booking.status);
+  const settled = statusSettled(booking.status);
   const balancePaise = settled ? 0 : Math.max(booking.totalPaise - netHeldPaise, 0);
   const overpaidPaise = settled ? 0 : Math.max(netHeldPaise - booking.totalPaise, 0);
   // What customers paid ON TOP, per Razorpay's "customer pays the fee"
@@ -413,7 +443,12 @@ export default async function AdminBookingPage({
         </div>
 
         <div>
-          <PaymentPanel bookingId={booking.id} balancePaise={Math.max(balancePaise, 0)} />
+          <PaymentPanel
+            bookingId={booking.id}
+            balancePaise={Math.max(balancePaise, 0)}
+            customerName={booking.profile.fullName ?? booking.profile.email}
+            creditPaise={creditAvailablePaise}
+          />
 
           {/* Only PROCESSED refunds have actually left the account; PENDING
               ones are with Razorpay. Both are held back from the refundable
@@ -422,12 +457,14 @@ export default async function AdminBookingPage({
           <RefundPanel
             reference={booking.reference}
             owedPaise={overpaidPaise}
-            refundedPaise={booking.refunds
-              .filter((r) => r.status === "PROCESSED")
-              .reduce((n, r) => n + r.amountPaise, 0)}
-            pendingPaise={booking.refunds
-              .filter((r) => r.status === "PENDING")
-              .reduce((n, r) => n + r.amountPaise, 0)}
+            // Razorpay-scoped, because this box only arranges Razorpay money.
+            gatewayRefundedPaise={committedGatewayRefundPaise(booking.refunds)}
+            otherRefundedPaise={
+              committedRefundPaise(booking.refunds) -
+              committedGatewayRefundPaise(booking.refunds)
+            }
+            heldPaise={refundableHeldPaise}
+            pendingPaise={pendingRefundsPaise}
             gatewayPaidPaise={gatewayPaidPaise}
             creditPaidPaise={creditPaidPaise}
             refundablePaise={
@@ -445,11 +482,8 @@ export default async function AdminBookingPage({
                */
               Math.max(
                 Math.min(
-                  gatewayPaidPaise -
-                    booking.refunds
-                      .filter((r) => r.status !== "FAILED" && r.method === "RAZORPAY")
-                      .reduce((n, r) => n + r.amountPaise, 0),
-                  netHeldPaise,
+                  gatewayPaidPaise - committedGatewayRefundPaise(booking.refunds),
+                  refundableHeldPaise,
                 ),
                 0,
               )
@@ -458,7 +492,11 @@ export default async function AdminBookingPage({
               (p) => p.method === "RAZORPAY" && p.status === "CAPTURED" && p.razorpayPaymentId,
             )}
           />
-          <OfflineRefundPanel reference={booking.reference} heldPaise={netHeldPaise} />
+          <OfflineRefundPanel
+            reference={booking.reference}
+            heldPaise={refundableHeldPaise}
+            pendingPaise={pendingRefundsPaise}
+          />
 
           <StatusPanel
             bookingId={booking.id}
@@ -469,6 +507,12 @@ export default async function AdminBookingPage({
             customerName={booking.profile.fullName ?? booking.profile.email}
             amountPaidPaise={booking.amountPaidPaise}
             refundedPaise={booking.refundedPaise}
+            // Money Razorpay has been asked for and not yet confirmed. It
+            // blocks carry-forward — the same rupees can't go back to their
+            // bank and become credit here.
+            pendingRefundPaise={booking.refunds
+              .filter((r) => r.status === "PENDING")
+              .reduce((n, r) => n + r.amountPaise, 0)}
           />
 
           <ReminderPanel

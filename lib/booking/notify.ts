@@ -7,6 +7,7 @@ import {
   creditIssuedEmail,
   paymentReceivedEmail,
   refundFailedAdminEmail,
+  refundProcessedAdminEmail,
   refundProcessedEmail,
   sendEmail,
 } from "@/emails";
@@ -262,26 +263,61 @@ export async function notifyRefundOutcome(input: {
       return;
     }
 
-    if (!to) return;
-    const mail = refundProcessedEmail({
-      name,
+    if (to) {
+      const mail = refundProcessedEmail({
+        name,
+        reference: booking.reference,
+        tripTitle: booking.trip.title,
+        amountPaise: input.amountPaise,
+        refundedTotalPaise: input.refundedTotalPaise,
+        paidPaise: booking.amountPaidPaise,
+      });
+
+      await sendEmail({
+        to,
+        subject: mail.subject,
+        html: mail.html,
+        text: mail.text,
+        template: "refund_processed",
+        bookingId: booking.id,
+        // Keyed on the refund, not the booking: two partial refunds on one
+        // booking are two separate pieces of news.
+        dedupeKey: `refund_processed:${input.razorpayRefundId}`,
+      });
+    }
+
+    /**
+     * And the team, because until this moment nobody knew.
+     *
+     * Razorpay confirms a refund hours or days after the button is pressed.
+     * In that window the money is in limbo — shown as pending, and blocking
+     * carry-forward — and the only way to learn it had landed was to keep
+     * reopening the booking. Sent whether or not the customer had an email
+     * on file: if they didn't, the team needs this more, not less.
+     */
+    const adminTo = process.env.ADMIN_NOTIFICATION_EMAIL?.trim();
+    if (!adminTo) return;
+
+    const alert = refundProcessedAdminEmail({
       reference: booking.reference,
       tripTitle: booking.trip.title,
+      customerEmail: to,
       amountPaise: input.amountPaise,
       refundedTotalPaise: input.refundedTotalPaise,
       paidPaise: booking.amountPaidPaise,
+      razorpayRefundId: input.razorpayRefundId,
     });
 
     await sendEmail({
-      to,
-      subject: mail.subject,
-      html: mail.html,
-      text: mail.text,
-      template: "refund_processed",
+      to: adminTo,
+      subject: alert.subject,
+      html: alert.html,
+      text: alert.text,
+      template: "admin_refund_processed",
       bookingId: booking.id,
-      // Keyed on the refund, not the booking: two partial refunds on one
-      // booking are two separate pieces of news.
-      dedupeKey: `refund_processed:${input.razorpayRefundId}`,
+      // Same key shape as the customer's copy, different prefix — a replayed
+      // webhook must not send either of them twice.
+      dedupeKey: `admin_refund_processed:${input.razorpayRefundId}`,
     });
   } catch (e) {
     console.error("[notify] refund outcome email failed", e);

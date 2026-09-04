@@ -117,22 +117,44 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
 
         {price.advanceDuePaise > 0 ? (
           <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
+            {/* trip.razorpayEnabled, not paymentsConfig.gatewayLive.
+                gatewayLive is a site-wide flag about the business and is still
+                false, while these trips have Razorpay switched ON — so this
+                read "nothing is charged on this site" one click away from a
+                Razorpay popup. The flag that decides what happens to THIS
+                booking is the one on the trip. */}
             <strong className="text-navy">
-              {paymentsConfig.gatewayLive
+              {trip.razorpayEnabled
                 ? `Pay ${formatINR(toRupees(price.advanceDuePaise))} now`
                 : `An advance of ${formatINR(toRupees(price.advanceDuePaise))} confirms your seat`}
             </strong>{" "}
-            {paymentsConfig.gatewayLive
-              ? "to confirm your seat."
+            {trip.razorpayEnabled
+              ? "at checkout to confirm your seat."
               : "— the team will collect it directly once you book; nothing is charged on this site."}{" "}
             The balance of {formatINR(toRupees(price.balancePaise))}{" "}
             is due before departure — we&apos;ll tell you the exact date when you book.
           </p>
         ) : (
           <p className="mt-5 rounded-2xl bg-teal/[0.07] px-4 py-3 text-[0.9rem] leading-relaxed text-navy/75">
-            <strong className="text-navy">Nothing is charged online.</strong> Book your seat
-            and our team calls you within one working day to confirm the trip and arrange
-            payment.
+            {/* No advance on this trip, so the whole amount falls due at once —
+                which on a Razorpay-enabled trip is collected at checkout.
+                "Nothing is charged online" is untrue there, so this branches
+                on the trip the way the checkout button does. */}
+            {trip.razorpayEnabled ? (
+              <>
+                <strong className="text-navy">
+                  Pay {formatINR(toRupees(price.totalPaise))} now
+                </strong>{" "}
+                to confirm your seat. Payment is taken at checkout, and your seat is
+                confirmed as soon as it goes through.
+              </>
+            ) : (
+              <>
+                <strong className="text-navy">Nothing is charged online.</strong> Book your
+                seat and our team calls you within one working day to confirm the trip and
+                arrange payment.
+              </>
+            )}
           </p>
         )}
 
@@ -171,7 +193,7 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
 
         <p className="mt-5 flex items-start gap-2 text-[0.8rem] leading-relaxed text-cream/55">
           <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-none" aria-hidden />
-          {paymentsConfig.gatewayLive
+          {trip.razorpayEnabled
             ? `Payments are processed by ${paymentsConfig.gatewayName}. We never see or store your card details.`
             : "No card or bank details are collected on this site. The team arranges payment with you directly."}
         </p>

@@ -273,6 +273,20 @@ export async function resendVerification(
 
   if (!email) return { status: "error", email, error: "Enter your email address." };
 
+  // Guard before generateLink. `type: "magiclink"` CREATES the account when
+  // the address is unknown rather than erroring, so without this an
+  // unauthenticated POST to this action with any address mints an auth.users
+  // row — no name, phone, date of birth or 18+ check, and an empty profile
+  // behind it. Verified against Supabase: an unknown address took auth.users
+  // from 7 to 8 and returned no error at all.
+  const [account] = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM auth.users WHERE email = ${email}`;
+
+  // Still reports success below whether or not it found one — this is the
+  // resend step of a flow that already told the person a code was sent, and
+  // changing its answer here would leak which addresses exist.
+  if (!account) return { status: "sent", email };
+
   const profile = await prisma.profile.findUnique({
     where: { email },
     select: { fullName: true },

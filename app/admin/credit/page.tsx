@@ -1,68 +1,85 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 
 import { requireAdmin } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { toRupees } from "@/lib/booking/pricing";
+import { creditHistories } from "@/lib/credit/ledger";
+import { getCreditHolders, getCreditTotals, rupees } from "@/lib/queries/admin";
 import { formatINR } from "@/lib/utils";
-import { Chip, EmptyState, Panel } from "../ui";
+import { EmptyState, Panel } from "../ui";
+import { FilterBar, FilterField, FilterSelect } from "../FilterBar";
+import { Pagination } from "../Pagination";
+import { CreditTable, type HolderRow } from "./CreditTable";
 
 export const metadata: Metadata = { title: "Travel credit" };
 
-const KIND: Record<string, { label: string; tone: string }> = {
-  ISSUED: { label: "Issued", tone: "info" },
-  REDEEMED: { label: "Used", tone: "ok" },
-  ADJUSTED: { label: "Adjusted", tone: "mute" },
-};
+type SP = Promise<{ q?: string; balance?: string; page?: string }>;
+
+const day = (d: Date) =>
+  d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
 /**
  * Every customer holding travel credit, and where it came from.
  *
  * ── Why the balances are grouped, not stored ──
  *
- * A customer's balance is SUM(amount_paise) over their entries, computed
- * here. Nothing caches it, so the number on this page and the rows beneath
- * it cannot disagree — which is the whole reason there is no balances table.
- *
- * The ledger is shown inline under each customer rather than behind a click.
- * The question this page answers is almost never "how much does X have" — it
- * is "where did that come from", asked while a customer is on the phone.
+ * A customer's balance is SUM(amount_paise) over their entries, computed on
+ * read. Nothing caches it, so the number in the table and the rows behind it
+ * cannot disagree — which is the whole reason there is no balances table.
  */
-export default async function CreditPage() {
+/** What to say when the table is empty — which depends on why it is. */
+function emptyBody({ q, balance }: { q?: string; balance?: string }) {
+  if (balance === "spent") {
+    return q
+      ? "Nobody matching that has spent all of their credit."
+      : "Everyone who has been given travel credit still has some left.";
+  }
+  if (balance === "all") return "No customer with a credit entry matches that search.";
+  if (q) {
+    return (
+      "Nobody holding credit matches that. Customers who have already spent theirs " +
+      "are hidden — switch Balance to “Everyone” to include them."
+    );
+  }
+  return "Carrying a cancelled booking forward from its booking screen is what creates it.";
+}
+
+export default async function CreditPage({ searchParams }: { searchParams: SP }) {
   await requireAdmin();
+  const filters = await searchParams;
 
-  const balances = await prisma.creditEntry.groupBy({
-    by: ["profileId"],
-    _sum: { amountPaise: true },
-    orderBy: { _sum: { amountPaise: "desc" } },
-  });
-
-  const holders = balances.filter((b) => (b._sum.amountPaise ?? 0) !== 0);
-  const ids = holders.map((b) => b.profileId);
-
-  const [profiles, entries] = await Promise.all([
-    ids.length
-      ? prisma.profile.findMany({
-          where: { id: { in: ids } },
-          select: { id: true, fullName: true, email: true, phone: true },
-        })
-      : [],
-    ids.length
-      ? prisma.creditEntry.findMany({
-          where: { profileId: { in: ids } },
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true, kind: true, amountPaise: true, note: true, createdAt: true,
-            profileId: true,
-            sourceBooking: { select: { reference: true, trip: { select: { title: true } } } },
-            appliedBooking: { select: { reference: true, trip: { select: { title: true } } } },
-          },
-        })
-      : [],
+  // Totals are read separately from the table on purpose: they describe the
+  // business, not the search. See getCreditTotals().
+  const [totals, { rows, total, page, perPage, pageCount }] = await Promise.all([
+    getCreditTotals(),
+    getCreditHolders(filters),
   ]);
 
-  const byId = new Map(profiles.map((p) => [p.id, p]));
-  const outstandingPaise = holders.reduce((n, b) => n + (b._sum.amountPaise ?? 0), 0);
+  const ledgers = await creditHistories(rows.map((r) => r.id));
+
+  const holders: HolderRow[] = rows.map((r) => ({
+    id: r.id,
+    name: r.fullName ?? r.email,
+    phone: r.phone,
+    email: r.email,
+    balancePaise: r.balancePaise,
+    addedPaise: r.addedPaise,
+    usedPaise: r.usedPaise,
+    entries: r.entries,
+    lastAt: day(r.lastAt),
+    ledger: (ledgers.get(r.id) ?? []).map((e) => {
+      const booking = e.sourceBooking ?? e.appliedBooking;
+      return {
+        id: e.id,
+        kind: e.kind,
+        amountPaise: e.amountPaise,
+        note: e.note,
+        date: day(e.createdAt),
+        reference: booking?.reference ?? null,
+        tripTitle: booking?.trip.title ?? null,
+      };
+    }),
+  }));
+
+  const hasFilters = Boolean(filters.q || filters.balance);
 
   return (
     <>
@@ -76,103 +93,82 @@ export default async function CreditPage() {
       </header>
 
       <div className="mb-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-        <Stat label="Customers holding credit" value={String(holders.length)} />
+        <Stat label="Customers holding credit" value={String(totals.holders)} />
         {/* A liability, not income: this is money owed in travel that has
             already been paid for and not yet delivered. */}
         <Stat
           label="Outstanding"
-          value={formatINR(toRupees(outstandingPaise))}
+          value={formatINR(rupees(totals.outstanding))}
           sub="owed in future travel"
-          tone={outstandingPaise > 0 ? "warn" : undefined}
+          tone={totals.outstanding > 0 ? "warn" : undefined}
         />
-        <Stat label="Ledger entries" value={String(entries.length)} />
+        <Stat label="Ledger entries" value={String(totals.entries)} />
       </div>
 
-      {holders.length === 0 ? (
-        <Panel>
-          <EmptyState
-            title="Nobody is holding travel credit"
-            body="Carrying a cancelled booking forward from its booking screen is what creates it."
-          />
-        </Panel>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {holders.map((b) => {
-            const person = byId.get(b.profileId);
-            const rows = entries.filter((e) => e.profileId === b.profileId);
-            const balance = b._sum.amountPaise ?? 0;
-
-            return (
-              <Panel key={b.profileId}>
-                <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-[#eef1f6] px-5 py-3.5">
-                  <div className="min-w-0">
-                    <Link
-                      href={`/admin/customers/${b.profileId}`}
-                      className="text-[0.95rem] font-semibold text-[#16203a] hover:text-teal"
-                    >
-                      {person?.fullName ?? person?.email ?? "Unknown customer"}
-                    </Link>
-                    <p className="text-[0.8rem] text-[#8b96ad]">
-                      {[person?.phone, person?.email].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-[#8b96ad]">
-                      Available
-                    </div>
-                    <div className="font-display text-[1.35rem] font-semibold tabular-nums text-[#0f8a5f]">
-                      {formatINR(toRupees(balance))}
-                    </div>
-                  </div>
-                </div>
-
-                <ul className="divide-y divide-[#f2f4f7]">
-                  {rows.map((e) => {
-                    const kind = KIND[e.kind] ?? { label: e.kind, tone: "mute" };
-                    const booking = e.sourceBooking ?? e.appliedBooking;
-                    return (
-                      <li key={e.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-3">
-                        <span
-                          className={`font-display text-[0.95rem] font-semibold tabular-nums ${
-                            e.amountPaise > 0 ? "text-[#0f8a5f]" : "text-[#16203a]"
-                          }`}
-                        >
-                          {e.amountPaise > 0 ? "+" : "−"}
-                          {formatINR(toRupees(Math.abs(e.amountPaise)))}
-                        </span>
-                        <Chip tone={kind.tone}>{kind.label}</Chip>
-                        {booking && (
-                          <Link
-                            href={`/admin/bookings/${booking.reference}`}
-                            className="text-[0.83rem] text-[#5a6785] hover:text-teal"
-                          >
-                            {booking.reference}
-                            <span className="text-[#8b96ad]"> · {booking.trip.title}</span>
-                          </Link>
-                        )}
-                        {e.note && <span className="text-[0.8rem] text-[#8b96ad]">{e.note}</span>}
-                        <span className="ml-auto whitespace-nowrap text-[0.8rem] text-[#8b96ad]">
-                          {e.createdAt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </Panel>
-            );
-          })}
-        </div>
-      )}
+      <Panel>
+        <FilterBar
+          action="/admin/credit"
+          hasFilters={hasFilters}
+          searchPlaceholder="Name, phone or email…"
+          table={
+            holders.length === 0 ? (
+              <EmptyState
+                title={hasFilters ? "Nobody matches that" : "Nobody is holding travel credit"}
+                body={emptyBody(filters)}
+              />
+            ) : (
+              <>
+                <CreditTable rows={holders} />
+                <Pagination
+                  action="/admin/credit"
+                  page={page}
+                  pageCount={pageCount}
+                  total={total}
+                  perPage={perPage}
+                  noun="customers"
+                />
+              </>
+            )
+          }
+        >
+          <FilterField label="Balance">
+            <FilterSelect
+              name="balance"
+              value={filters.balance}
+              // The empty option is the default view, not "no filter".
+              placeholder="Holding credit"
+              options={[
+                { value: "spent", label: "Fully used" },
+                { value: "all", label: "Everyone" },
+              ]}
+            />
+          </FilterField>
+        </FilterBar>
+      </Panel>
     </>
   );
 }
 
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "ok" | "warn" }) {
+function Stat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "ok" | "warn";
+}) {
   const colour = tone === "ok" ? "text-[#0f8a5f]" : tone === "warn" ? "text-[#b26a00]" : "";
   return (
     <div className="rounded-[14px] border border-[#e3e7ee] bg-white p-[15px_18px] shadow-sm">
-      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#8b96ad]">{label}</div>
-      <div className={`mt-1.5 font-display text-[1.5rem] font-semibold tabular-nums ${colour}`}>{value}</div>
+      <div className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#8b96ad]">
+        {label}
+      </div>
+      <div className={`mt-1.5 font-display text-[1.5rem] font-semibold tabular-nums ${colour}`}>
+        {value}
+      </div>
       {sub && <div className="mt-1 text-[0.75rem] text-[#8b96ad]">{sub}</div>}
     </div>
   );

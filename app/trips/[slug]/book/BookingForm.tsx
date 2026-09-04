@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus } from "lucide-react";
 
 import type { BookableTrip } from "@/lib/queries/booking";
+import { paymentsConfig } from "@/lib/data/siteConfig";
 import {
   computePricing,
   MAX_SEATS_PER_BOOKING,
@@ -244,7 +245,18 @@ export function BookingForm({
                   );
                 }
               }
-              router.push(`/account/bookings/${order.reference}?new=1`);
+              /**
+               * `paid`, not `1`.
+               *
+               * The banner on the other side used to key off amountPaidPaise,
+               * which is written by /api/payments/verify — and the comment
+               * above says that call can time out and leave the webhook to
+               * settle. In that window someone who had just paid was greeted
+               * with "Nothing has been charged". How they arrived is a fact
+               * that doesn't depend on settlement timing; the balance is
+               * still read from the booking.
+               */
+              router.push(`/account/bookings/${order.reference}?new=paid`);
             });
           },
           onDismiss: () => {
@@ -387,10 +399,24 @@ export function BookingForm({
           <section className="rounded-3xl border border-navy/8 bg-cream p-6 md:p-8">
             <h2 className="font-display text-2xl tracking-tight text-navy">Check it over</h2>
             <p className="mt-1 text-[0.9rem] text-navy/60">
-              Nothing is charged now.{" "}
-              {price.advanceDuePaise > 0
-                ? "We'll email you and confirm the advance over WhatsApp."
-                : "We'll email you, then the team will call to arrange payment."}
+              {/* Sits directly above the button. On a Razorpay trip that button
+                  reads "Pay ₹2,074 & book", so "Nothing is charged now" was
+                  contradicted by the next thing the eye lands on. */}
+              {payOnline ? (
+                <>
+                  Check the details, then pay {formatINR(toRupees(payNowPaise))} to confirm.
+                  {price.balancePaise > 0 && !payFull
+                    ? " The balance is due before departure."
+                    : ""}
+                </>
+              ) : (
+                <>
+                  Nothing is charged now.{" "}
+                  {price.advanceDuePaise > 0
+                    ? "We'll email you and confirm the advance over WhatsApp."
+                    : "We'll email you, then the team will call to arrange payment."}
+                </>
+              )}
             </p>
 
             <dl className="mt-6 flex flex-col gap-px overflow-hidden rounded-2xl border border-navy/10">
@@ -569,11 +595,32 @@ function PriceSummary({
         )}
       </div>
 
+      {/*
+        Branches on the SAME flag the button does — trip.razorpayEnabled, via
+        `payOnline` above. It used to say "no payment is taken online right
+        now" unconditionally, directly under a button reading "Pay ₹2,074 &
+        book", on a trip that does open Razorpay. Any other source of truth
+        here (the site-wide paymentsConfig.gatewayLive, say) re-creates that
+        gap the moment the two disagree.
+      */}
       <p className="mt-3 px-1 text-[0.8rem] leading-relaxed text-navy/50">
-        No payment is taken online right now. Submitting holds your seats
-        {price.advanceDuePaise > 0
-          ? " and the team will reach out to collect the advance."
-          : " and the team will contact you to arrange payment."}
+        {trip.razorpayEnabled ? (
+          <>
+            You&apos;ll be taken to {paymentsConfig.gatewayName} to pay securely — we never
+            see your card details. Your seats are confirmed the moment the payment goes
+            through
+            {price.advanceDuePaise > 0 && !payFull
+              ? ", and we'll tell you the exact date the balance is due."
+              : "."}
+          </>
+        ) : (
+          <>
+            No payment is taken online right now. Submitting holds your seats
+            {price.advanceDuePaise > 0
+              ? " and the team will reach out to collect the advance."
+              : " and the team will contact you to arrange payment."}
+          </>
+        )}
       </p>
     </aside>
   );

@@ -8,13 +8,15 @@ import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { seatsCounted } from "@/lib/booking/seats";
+import { statusOpen } from "@/lib/booking/lifecycle";
+import { committedRefundPaise } from "@/lib/booking/refunds";
 import {
   notifyCreditIssued,
   notifyOfflineRefund,
   notifyPaymentRecorded,
   notifyStatusChange,
 } from "@/lib/booking/notify";
-import { issueCredit } from "@/lib/credit/ledger";
+import { isCreditInsufficient, issueCredit, redeemCredit } from "@/lib/credit/ledger";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
 import {
   reminderSelect,
@@ -81,7 +83,15 @@ const money = z
 
 const paymentSchema = z.object({
   bookingId: z.string().uuid(),
-  method: z.enum(["CASH", "UPI_MANUAL", "BANK_TRANSFER", "RAZORPAY", "OTHER"]),
+  /**
+   * CREDIT spends the customer's travel credit instead of taking money.
+   *
+   * A method like any other, deliberately: the ledger entry below is the
+   * only credit-aware line in this action, and everything downstream — the
+   * paid total, the balance, instalment reminders, every report — carries on
+   * knowing nothing about credit. Same shape as createBookingForCustomer.
+   */
+  method: z.enum(["CASH", "UPI_MANUAL", "BANK_TRANSFER", "RAZORPAY", "CREDIT", "OTHER"]),
   amountPaise: money,
   externalReference: z.string().trim().max(120).optional().or(z.literal("")),
   notes: z.string().trim().max(500).optional().or(z.literal("")),
@@ -110,7 +120,8 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
       const booking = await tx.booking.findUnique({
         where: { id: data.bookingId },
         select: {
-          id: true, status: true, totalPaise: true, amountPaidPaise: true,
+          id: true, reference: true, profileId: true,
+          status: true, totalPaise: true, amountPaidPaise: true,
           trip: { select: { id: true, slug: true } },
         },
       });
@@ -139,6 +150,25 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         );
       }
 
+      /**
+       * Credit is spent from the ledger before the payment is written.
+       *
+       * redeemCredit takes a row lock on the customer first, so two admins
+       * applying the same balance on two screens serialise instead of both
+       * succeeding — and it refuses, with the available figure in the
+       * message, rather than letting the database trigger reject it.
+       */
+      const byCredit = data.method === "CREDIT";
+      if (byCredit) {
+        await redeemCredit(tx, {
+          profileId: booking.profileId,
+          amountPaise: data.amountPaise,
+          appliedBookingId: booking.id,
+          createdByProfileId: admin.id,
+          note: `Applied to ${booking.reference}`,
+        });
+      }
+
       await tx.payment.create({
         data: {
           bookingId: booking.id,
@@ -148,8 +178,10 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
           status: "CAPTURED",
           amountPaise: data.amountPaise,
           recordedByProfileId: admin.id,
-          externalReference: data.externalReference || null,
-          notes: data.notes || null,
+          // No UTR exists for credit, and the note says where it came from
+          // when the admin didn't type one.
+          externalReference: byCredit ? null : data.externalReference || null,
+          notes: byCredit ? data.notes || "Travel credit" : data.notes || null,
           capturedAt: new Date(),
         },
       });
@@ -209,6 +241,9 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
     revalidateBooking(result.slug);
     return { ok: true };
   } catch (e) {
+    if (isCreditInsufficient(e)) {
+      return { ok: false, error: "That's more travel credit than this customer has left." };
+    }
     return fail(e, "Couldn't record that payment.");
   }
 }
@@ -245,6 +280,19 @@ export async function updateBookingStatus(
         select: { id: true, status: true, seats: true, trip: { select: { id: true, slug: true } } },
       });
       if (!booking) throw new Error("Booking not found.");
+      /**
+       * A closed booking's status is a record of how it ended, not a field.
+       *
+       * Reopening one overwrites `cancelled_at` and the reason with NULL, so
+       * afterwards nothing shows it was ever cancelled — and a booking that
+       * was carried forward could be carried forward again, issuing the same
+       * money as credit twice. See lib/booking/lifecycle.ts.
+       */
+      if (!statusOpen(booking.status)) {
+        throw new Error(
+          "SAFE:This booking is closed and its status can no longer be changed.",
+        );
+      }
       // No change, no email. Re-saving the same status must not chase the
       // customer with a second copy of news they already had.
       if (booking.status === status) return { slug: booking.trip.slug, changed: false };
@@ -654,11 +702,50 @@ export async function carryBookingForward(
           id: true, status: true, seats: true, profileId: true,
           amountPaidPaise: true, refundedPaise: true,
           trip: { select: { id: true, slug: true } },
+          // Money Razorpay has been asked for but hasn't confirmed yet.
+          refunds: {
+            where: { status: "PENDING" },
+            select: { amountPaise: true },
+          },
         },
       });
       if (!booking) throw new Error("That booking no longer exists.");
-      if (booking.status === "CARRIED_FORWARD") {
-        throw new Error("This booking has already been carried forward.");
+      /**
+       * Was a check for CARRIED_FORWARD alone, which only held while the
+       * booking sat still: setting it back to Confirmed and carrying it
+       * forward again issued the credit a second time out of the same
+       * payment. The gate is now the whole closed set.
+       *
+       * The SAFE: prefix matters — without it fail() swallowed this sentence
+       * and showed the generic "Couldn't carry this booking forward."
+       */
+      if (!statusOpen(booking.status)) {
+        throw new Error(
+          booking.status === "CARRIED_FORWARD"
+            ? "SAFE:This booking has already been carried forward."
+            : "SAFE:This booking is closed, so there is nothing left to carry forward.",
+        );
+      }
+
+      /**
+       * Not while money is already on its way back.
+       *
+       * A PENDING refund is committed: Razorpay has been asked to send it and
+       * will, hours or days later, tell us it went. Carrying the booking
+       * forward in that window promises the same rupees twice — once as
+       * credit here, once into the customer's bank — and the second one is
+       * irreversible.
+       *
+       * `refundedPaise` cannot protect against this: it only counts refunds
+       * that have PROCESSED, which is exactly what a pending one hasn't.
+       */
+      const pendingRefundPaise = booking.refunds.reduce((n, r) => n + r.amountPaise, 0);
+      if (pendingRefundPaise > 0) {
+        throw new Error(
+          `SAFE:A refund of ₹${(pendingRefundPaise / 100).toLocaleString("en-IN")} is still ` +
+            `on its way back through Razorpay. Wait for it to land, then carry forward ` +
+            `whatever is left.`,
+        );
       }
 
       /**
@@ -768,13 +855,32 @@ export async function recordOfflineRefund(
             orderBy: { capturedAt: "desc" },
             select: { id: true, amountPaise: true },
           },
+          // Needed to hold back money already on its way out through Razorpay.
+          refunds: { select: { amountPaise: true, status: true } },
           creditIssued: { select: { amountPaise: true } },
         },
       });
       if (!booking) throw new Error("SAFE:That booking no longer exists.");
 
+      /**
+       * NOT blocked while a Razorpay refund is pending, unlike requestRefund.
+       *
+       * The ceiling below already subtracts in-flight money, so the same
+       * rupees cannot leave twice — and when a webhook never arrives this is
+       * the only way left to settle with the customer. Refusing here would
+       * mean one stuck refund freezes the booking permanently.
+       */
       const creditIssued = booking.creditIssued.reduce((n, c) => n + c.amountPaise, 0);
-      const heldPaise = booking.amountPaidPaise - booking.refundedPaise - creditIssued;
+      /**
+       * Committed, not just processed.
+       *
+       * This used to measure against `refunded_paise`, which counts only what
+       * has landed — so ₹1,000 already travelling back through Razorpay could
+       * be handed over in cash as well, and the booking returned ₹1,000 more
+       * than it ever took.
+       */
+      const heldPaise =
+        booking.amountPaidPaise - committedRefundPaise(booking.refunds) - creditIssued;
 
       if (heldPaise <= 0) {
         throw new Error("SAFE:There is nothing left on this booking to return.");

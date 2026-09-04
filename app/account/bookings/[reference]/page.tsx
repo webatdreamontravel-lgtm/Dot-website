@@ -54,6 +54,8 @@ const HOW_REFUNDED: Record<string, string> = {
 export default async function BookingDetailPage({ params, searchParams }: Params) {
   const { reference } = await params;
   const { new: isNew } = await searchParams;
+  // Set by the checkout flow only when Razorpay actually took the money.
+  const paidNow = isNew === "paid";
 
   const profile = await requireUser(`/account/bookings/${reference}`);
   const booking = await getBookingForCustomer(reference, profile.id);
@@ -134,10 +136,29 @@ export default async function BookingDetailPage({ params, searchParams }: Params
               </span>
               <div>
                 <p className="font-display text-lg leading-tight text-navy">
-                  That&apos;s done — your seats are held.
+                  {paidNow ? "Payment received — you're booked." : "That's done — your seats are held."}
                 </p>
                 <p className="mt-1 text-[0.9rem] leading-relaxed text-navy/65">
-                  A confirmation is on its way to {profile.email}. Nothing has been charged.
+                  {paidNow ? (
+                    <>
+                      A receipt is on its way to {profile.email}.
+                      {/* Only once the payment has actually landed on the booking.
+                          Until then `balancePaise` is still the whole trip, and
+                          quoting it would name a figure they have just paid. */}
+                      {booking.amountPaidPaise > 0 && balancePaise > 0 && (
+                        <>
+                          {" "}
+                          The remaining {formatINR(toRupees(balancePaise))} is due before
+                          departure — the date is below.
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      A confirmation is on its way to {profile.email}. Nothing has been
+                      charged — the team will contact you to arrange payment.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
