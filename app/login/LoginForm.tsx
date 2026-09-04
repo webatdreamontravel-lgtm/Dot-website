@@ -139,6 +139,15 @@ export function LoginForm({ next }: { next: string }) {
             error={pwState.error}
           />
 
+          <div className="-mt-1.5 text-right">
+            <Link
+              href={next ? `/reset-password?next=${encodeURIComponent(next)}` : "/reset-password"}
+              className="text-[0.83rem] font-medium text-navy/60 underline underline-offset-4 hover:text-navy"
+            >
+              Forgot your password?
+            </Link>
+          </div>
+
           <button
             type="submit"
             disabled={signingIn}

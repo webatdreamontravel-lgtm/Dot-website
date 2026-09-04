@@ -13,6 +13,7 @@
 export { sendEmail, type SendResult } from "./send";
 
 export { verificationEmail } from "./verification";
+export { passwordResetEmail } from "./passwordReset";
 export { bookingConfirmedEmail } from "./bookingConfirmed";
 export { balanceReminderEmail } from "./balanceReminder";
 export { paymentReceivedEmail } from "./paymentReceived";

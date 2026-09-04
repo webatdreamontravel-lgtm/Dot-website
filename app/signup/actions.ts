@@ -20,6 +20,8 @@ export type SignupState = {
   fieldErrors?: Record<string, string>;
   /** Echoed back so a rejected form doesn't lose everything already typed. */
   values?: Record<string, string>;
+  /** Renders a "sign in instead" link beside the error. */
+  existingAccount?: boolean;
 };
 
 const MIN_AGE = 18;
@@ -134,15 +136,40 @@ export async function signUp(_prev: SignupState, formData: FormData): Promise<Si
       // a booking over WhatsApp. That person has never signed in and never
       // set a password, so let this signup CLAIM it — otherwise they'd be
       // permanently locked out of a booking that is genuinely theirs.
-      const claimed = await claimPreCreatedAccount({
+      const outcome = await claimPreCreatedAccount({
         email, password, fullName, phone, state, city, dateOfBirth, gender, nextPath,
       });
-      if (claimed) return { status: "sent", email };
 
-      // Otherwise it's a real, verified account. Never confirm or deny that —
-      // it would turn the signup form into a way to enumerate the customer
-      // list — so report exactly what a genuine new signup reports.
-      return { status: "sent", email };
+      if (outcome === "claimed") return { status: "sent", email };
+
+      if (outcome === "verified") {
+        // A real account that has already proved this address. We tell the
+        // person so, rather than staging a fake "check your email", because
+        // silently doing nothing is the single most confusing thing this form
+        // can do — they wait for a code that is never coming.
+        //
+        // The cost is real and deliberate: this makes signup an oracle for
+        // whether an address has an account here. Login and password reset
+        // already behave the same way, so the information is not new, but it
+        // is now available without any guesswork.
+        return {
+          status: "error",
+          email,
+          error: "An account already exists with this email address.",
+          existingAccount: true,
+          values: { ...raw, password: "" },
+        };
+      }
+
+      // "failed" — the account exists but something went wrong claiming it.
+      // Don't say "already exists": the password may have just been changed,
+      // and sending them to log in with the old one would be a dead end.
+      return {
+        status: "error",
+        email,
+        error: "We couldn't finish setting up that account. Try again in a moment.",
+        values: { ...raw, password: "" },
+      };
     }
     console.error("[signup] generateLink failed", error?.message);
     return {
@@ -191,6 +218,49 @@ export async function signUp(_prev: SignupState, formData: FormData): Promise<Si
   }
 
   return { status: "sent", email };
+}
+
+/**
+ * Answers whether an address already belongs to a usable account, so the
+ * signup form can say so while someone is still filling it in rather than
+ * after they've typed everything and pressed the button.
+ *
+ * Mirrors the rule in signUp() exactly: only a CONFIRMED account is a
+ * conflict. An unconfirmed one was pre-created by the team for a booking
+ * taken over WhatsApp, and signup is allowed to claim it — reporting that as
+ * "taken" would block the very people it was created for.
+ *
+ * This is advisory. The form does not gate submission on it, because a
+ * network blip must not stop someone signing up, and signUp() re-checks
+ * server-side regardless.
+ *
+ * Worth being clear-eyed about: this is an endpoint that answers "does this
+ * address have an account here?" to anyone who asks, quickly and repeatedly.
+ * That follows from the decision to name the collision on this form at all —
+ * but a form submission is slow and scriptable only clumsily, whereas this is
+ * neither. If enumeration ever matters more than the UX, this is the thing to
+ * put behind a rate limit.
+ */
+export async function checkEmailAvailability(email: string): Promise<{ taken: boolean }> {
+  const clean = String(email ?? "").trim().toLowerCase();
+
+  // Don't answer for anything that isn't a plausible address — no reason to
+  // let the endpoint be probed with junk.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean) || clean.length > 160) {
+    return { taken: false };
+  }
+
+  try {
+    const [row] = await prisma.$queryRaw<{ confirmed: boolean }[]>`
+      SELECT email_confirmed_at IS NOT NULL AS confirmed
+      FROM auth.users WHERE email = ${clean}`;
+
+    return { taken: Boolean(row?.confirmed) };
+  } catch (e) {
+    // Never let a lookup failure present as "this address is taken".
+    console.error("[signup] email availability check failed", e);
+    return { taken: false };
+  }
 }
 
 /** Re-sends the confirmation link for an address that hasn't confirmed yet. */
@@ -244,9 +314,15 @@ export async function resendVerification(
  * someone who has already proved that address, and overwriting its password
  * from an unauthenticated form would be account takeover.
  *
- * Returns false when the account isn't claimable, so the caller can fall
- * back to the neutral "check your email" response.
+ * Returns which of three things happened, because the caller has to say
+ * something different for each:
+ *
+ *   "claimed"  — the account was unverified, is now theirs, code sent
+ *   "verified" — a real account already owns this address; tell them to log in
+ *   "failed"   — it exists but something broke; do NOT send them to log in,
+ *                the password may have just changed underneath them
  */
+type ClaimOutcome = "claimed" | "verified" | "failed";
 async function claimPreCreatedAccount({
   email,
   password,
@@ -267,14 +343,20 @@ async function claimPreCreatedAccount({
   dateOfBirth: string;
   gender: "MALE" | "FEMALE";
   nextPath: string;
-}) {
+}): Promise<ClaimOutcome> {
   const admin = createAdminClient();
 
   const [row] = await prisma.$queryRaw<{ id: string; confirmed: boolean }[]>`
     SELECT id, email_confirmed_at IS NOT NULL AS confirmed
     FROM auth.users WHERE email = ${email}`;
 
-  if (!row || row.confirmed) return false;
+  // No row at all means generateLink rejected the address for some reason
+  // other than "taken" — not something to send anyone to the login page over.
+  if (!row) return "failed";
+
+  // Confirmed: someone has already proved this address. Overwriting its
+  // password from an unauthenticated form would be account takeover.
+  if (row.confirmed) return "verified";
 
   const { error } = await admin.auth.admin.updateUserById(row.id, {
     password,
@@ -282,7 +364,7 @@ async function claimPreCreatedAccount({
   });
   if (error) {
     console.error("[signup] claim failed", error.message);
-    return false;
+    return "failed";
   }
 
   await prisma.profile
@@ -308,15 +390,19 @@ async function claimPreCreatedAccount({
 
   if (linkError || !data.properties?.hashed_token) {
     console.error("[signup] claim link failed", linkError?.message);
-    return false;
+    return "failed";
   }
 
-  return deliver({
+  const sent = await deliver({
     email,
     fullName,
     code: data.properties.email_otp,
     hashedToken: data.properties.hashed_token,
   });
+
+  // The password IS now theirs even if the mail bounced, so "failed" here
+  // means "we couldn't get you the code", not "nothing happened".
+  return sent ? "claimed" : "failed";
 }
 
 async function deliver({
