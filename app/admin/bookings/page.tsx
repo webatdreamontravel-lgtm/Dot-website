@@ -3,7 +3,7 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { getAdminBookings, getTripOptions, rupees } from "@/lib/queries/admin";
 import { formatINR } from "@/lib/utils";
-import { BOOKING_TONE, Chip, EmptyState, PAYMENT_TONE, Panel } from "../ui";
+import { BOOKING_TONE, bookingTone, Chip, EmptyState, PAYMENT_TONE, Panel } from "../ui";
 import { FilterBar, FilterField, FilterSelect } from "../FilterBar";
 import { Pagination } from "../Pagination";
 
@@ -72,7 +72,7 @@ export default async function AdminBookingsPage({ searchParams }: { searchParams
                     </thead>
                     <tbody>
                       {bookings.rows.map((b) => {
-                        const status = BOOKING_TONE[b.status] ?? { tone: "mute", label: b.status };
+                        const status = bookingTone(b);
                         const pay = PAYMENT_TONE[b.paymentState];
                         return (
                           <tr key={b.id} className="hover:bg-[#fafbfd]">

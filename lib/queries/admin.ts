@@ -528,7 +528,7 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
       trip: { select: { title: true, slug: true } },
@@ -584,7 +584,7 @@ export async function getBookingsForTrip(
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
@@ -609,7 +609,7 @@ export async function getAdminBooking(reference: string) {
   return prisma.booking.findUnique({
     where: { reference },
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       unitPricePaise: true, subtotalPaise: true,
       gstPercent: true, gstPaise: true, tcsPercent: true, tcsPaise: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true,
@@ -1084,7 +1084,7 @@ export async function getCustomerBookings(
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
       trip: { select: { title: true, batchName: true, startDate: true, slug: true } },

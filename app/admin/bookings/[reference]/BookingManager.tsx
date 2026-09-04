@@ -49,7 +49,24 @@ const SOURCES = [
   { value: "FESTIVAL", label: "Festival" },
 ];
 
-const STATUSES = Object.entries(BOOKING_TONE).map(([value, v]) => ({ value, label: v.label }));
+/**
+ * What an admin may set by hand.
+ *
+ * EXPIRED is left out: it is something that HAPPENS to a booking, not
+ * something anyone decides. The release-holds cron sets it when a checkout
+ * is abandoned, and createOrder sets it on the old booking when a customer
+ * restarts — both automatic, both meaning "this never became a booking".
+ * Picking it by hand would claim a customer walked away when they didn't.
+ *
+ * No need to keep it for a booking that already IS expired: statusOpen()
+ * refuses every closed status, so that panel renders read-only and this
+ * select never appears on one. The filter dropdowns are built from
+ * BOOKING_TONE directly and still offer it — you filter by what is stored.
+ */
+const SETTABLE_BY_HAND = new Set(["EXPIRED"]);
+const STATUSES = Object.entries(BOOKING_TONE)
+  .filter(([value]) => !SETTABLE_BY_HAND.has(value))
+  .map(([value, v]) => ({ value, label: v.label }));
 
 /** Shared plumbing: run an action, surface its error, refresh on success. */
 function useAction() {
@@ -73,13 +90,38 @@ function useAction() {
   return { run, pending, error, setError };
 }
 
+/**
+ * The booking belongs to whoever is paying for it, for the next few minutes.
+ *
+ * Shown instead of the form rather than beside it: a disabled amount box on
+ * a screen whose whole job is taking money invites typing into it and
+ * wondering why nothing happens.
+ */
+function InCheckout({ minsLeft, what }: { minsLeft: number; what: string }) {
+  return (
+    <p
+      role="alert"
+      className="mt-3 rounded-lg border border-[#cfe3ef] bg-[#eaf4f9] px-3.5 py-3 text-[0.83rem] leading-relaxed text-[#1d5f7a]"
+    >
+      <strong>Someone is paying for this booking right now.</strong> Their seats are held for
+      another {minsLeft} minute{minsLeft === 1 ? "" : "s"} — {what} until the payment lands,
+      or the hold lapses on its own.
+    </p>
+  );
+}
+
 export function PaymentPanel({
   bookingId,
   balancePaise,
   customerName,
   creditPaise = 0,
+  inCheckout = false,
+  checkoutMinsLeft = 0,
 }: {
   bookingId: string;
+  /** A customer is mid-Razorpay on this booking. See checkoutInFlight(). */
+  inCheckout?: boolean;
+  checkoutMinsLeft?: number;
   balancePaise: number;
   customerName: string;
   /** What this customer is holding in travel credit, across all bookings. */
@@ -154,6 +196,16 @@ export function PaymentPanel({
    * money genuinely taken beyond the total is a repricing or a mistake, both
    * of which want a person thinking rather than a quick entry here.
    */
+  if (inCheckout) {
+    return (
+      <Panel title="Record a payment">
+        <div className="px-5 pb-5">
+          <InCheckout minsLeft={checkoutMinsLeft} what="nothing can be recorded" />
+        </div>
+      </Panel>
+    );
+  }
+
   if (balancePaise <= 0) {
     return (
       <Panel title="Record a payment">
@@ -322,6 +374,8 @@ const STATUS_EMAIL: Record<string, string> = {
 };
 
 export function StatusPanel({
+  inCheckout = false,
+  checkoutMinsLeft = 0,
   bookingId,
   reference,
   status,
@@ -332,6 +386,9 @@ export function StatusPanel({
   refundedPaise,
   pendingRefundPaise = 0,
 }: {
+  /** A customer is mid-Razorpay on this booking. See checkoutInFlight(). */
+  inCheckout?: boolean;
+  checkoutMinsLeft?: number;
   bookingId: string;
   reference: string;
   status: string;
@@ -409,6 +466,16 @@ export function StatusPanel({
    * refuses this too — see lib/booking/lifecycle.ts — and this panel exists
    * so nobody reaches that error by clicking a control that looked live.
    */
+  if (inCheckout) {
+    return (
+      <Panel title="Status">
+        <div className="px-5 pb-5">
+          <InCheckout minsLeft={checkoutMinsLeft} what="the status can't be changed" />
+        </div>
+      </Panel>
+    );
+  }
+
   if (!statusOpen(status)) {
     const tone = BOOKING_TONE[status];
     return (

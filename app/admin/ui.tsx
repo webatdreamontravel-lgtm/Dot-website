@@ -1,3 +1,4 @@
+import { checkoutInFlight } from "@/lib/booking/lifecycle";
 import { cn } from "@/lib/utils";
 
 /** Shared chrome for admin screens. Plain, dense, unbranded on purpose —
@@ -67,6 +68,24 @@ export const BOOKING_TONE: Record<string, { tone: string; label: string }> = {
   CARRIED_FORWARD: { tone: "info", label: "Carried forward" },
   EXPIRED: { tone: "mute", label: "Expired" },
 };
+
+/**
+ * The chip for one booking, which is not always its stored status.
+ *
+ * A booking whose hold is still running has a customer in the Razorpay
+ * window this second. "Pending payment" reads like something to chase;
+ * "Paying now" reads like something to leave alone, which is what it is.
+ * Nothing else about the booking changes — see checkoutInFlight().
+ *
+ * BOOKING_TONE stays keyed on the raw status because the filter dropdowns
+ * are built from it, and you filter by what is stored.
+ */
+export function bookingTone(booking: { status: string; holdExpiresAt?: Date | null }) {
+  if (checkoutInFlight({ status: booking.status, holdExpiresAt: booking.holdExpiresAt ?? null })) {
+    return { tone: "info", label: "Paying now" };
+  }
+  return BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
+}
 
 export const PAYMENT_TONE: Record<string, { tone: string; label: string }> = {
   PAID: { tone: "ok", label: "Paid in full" },

@@ -41,3 +41,45 @@ export function statusOpen(status: BookingStatus | string): boolean {
 export function statusSettled(status: BookingStatus | string): boolean {
   return !statusOpen(status);
 }
+
+/**
+ * A customer is at the till right now.
+ *
+ * PENDING_PAYMENT covers two quite different things: someone with a Razorpay
+ * window open this minute, and someone who wandered off half an hour ago and
+ * whose hold has since lapsed. Only the first is dangerous to touch — an
+ * admin recording cash, changing the status or removing a seat while the
+ * card is being charged races a payment that is already in flight, and
+ * whichever lands second silently overwrites the other.
+ *
+ * ── Why this is derived, not a status of its own ──
+ *
+ * The difference between the two is the clock, and a clock is not a state
+ * machine. A PAYMENT_PROCESSING enum value would need something to move
+ * bookings back out of it — a cron, a webhook, a timer — and anything that
+ * can stall would leave real bookings frozen with no way in. The hold's own
+ * expiry already says it, exactly, with nothing to keep in sync: the moment
+ * it passes, this is false again and the booking is ordinary.
+ *
+ * It is the same fact `trip_seats_available()` uses to free the seat
+ * (`expires_at > now()`), so the lock and the seat lapse together.
+ */
+export function checkoutInFlight(
+  booking: { status: string; holdExpiresAt: Date | null },
+  now: Date = new Date(),
+): boolean {
+  return (
+    booking.status === "PENDING_PAYMENT" &&
+    booking.holdExpiresAt !== null &&
+    booking.holdExpiresAt > now
+  );
+}
+
+/** Whole minutes left on the hold, floored at 1 so it never reads "0 minutes". */
+export function checkoutMinutesLeft(
+  holdExpiresAt: Date | null,
+  now: Date = new Date(),
+): number {
+  if (!holdExpiresAt) return 0;
+  return Math.max(1, Math.ceil((holdExpiresAt.getTime() - now.getTime()) / 60_000));
+}

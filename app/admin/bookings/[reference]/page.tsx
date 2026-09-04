@@ -3,7 +3,11 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { requireAdmin } from "@/lib/auth";
-import { statusSettled } from "@/lib/booking/lifecycle";
+import {
+  checkoutInFlight,
+  checkoutMinutesLeft,
+  statusSettled,
+} from "@/lib/booking/lifecycle";
 import {
   committedGatewayRefundPaise,
   committedRefundPaise,
@@ -12,7 +16,7 @@ import {
 import { creditBalance } from "@/lib/credit/ledger";
 import { getAdminBooking, rupees } from "@/lib/queries/admin";
 import { formatDateRange, formatINR } from "@/lib/utils";
-import { BOOKING_TONE, Chip, PAYMENT_TONE, Panel } from "../../ui";
+import { bookingTone, Chip, PAYMENT_TONE, Panel } from "../../ui";
 import { prisma } from "@/lib/prisma";
 import {
   DetailsPanel,
@@ -62,7 +66,17 @@ export default async function AdminBookingPage({
    */
   const creditAvailablePaise = await creditBalance(booking.profile.id);
 
-  const status = BOOKING_TONE[booking.status] ?? { tone: "mute", label: booking.status };
+  const status = bookingTone(booking);
+
+  /**
+   * A customer is in the Razorpay window on this booking right now.
+   *
+   * Everything that moves money, seats or status is refused for the rest of
+   * the hold — see assertNotInCheckout() in the actions. The panels read
+   * this so the refusal is on screen instead of arriving after a click.
+   */
+  const inCheckout = checkoutInFlight(booking);
+  const checkoutMinsLeft = checkoutMinutesLeft(booking.holdExpiresAt);
   /**
    * The money, as three related figures rather than two unrelated ones.
    *
@@ -444,6 +458,8 @@ export default async function AdminBookingPage({
 
         <div>
           <PaymentPanel
+            inCheckout={inCheckout}
+            checkoutMinsLeft={checkoutMinsLeft}
             bookingId={booking.id}
             balancePaise={Math.max(balancePaise, 0)}
             customerName={booking.profile.fullName ?? booking.profile.email}
@@ -499,6 +515,8 @@ export default async function AdminBookingPage({
           />
 
           <StatusPanel
+            inCheckout={inCheckout}
+            checkoutMinsLeft={checkoutMinsLeft}
             bookingId={booking.id}
             reference={booking.reference}
             status={booking.status}
