@@ -26,6 +26,7 @@ export function TextField({
   name,
   label,
   error,
+  invalid,
   hint,
   type = "text",
   className,
@@ -34,7 +35,13 @@ export function TextField({
 }: {
   name: string;
   label: string;
-  error?: string;
+  error?: React.ReactNode;
+  /**
+   * Marks the field wrong without printing a message under it — for when the
+   * explanation belongs somewhere else, like the alert at the top of a form.
+   * `error` implies this; set it on its own when there is no inline text.
+   */
+  invalid?: boolean;
   hint?: string;
   type?: string;
   className?: string;
@@ -49,12 +56,15 @@ export function TextField({
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "name" | "type" | "className">) {
   const errorId = `${name}-error`;
   const hintId = `${name}-hint`;
+  // An inline message always implies the field is wrong; `invalid` covers the
+  // case where the message lives elsewhere.
+  const wrong = Boolean(error) || Boolean(invalid);
 
   return (
     <div className={className}>
       <Label htmlFor={name} label={label} hint={hint} hintId={hintId} />
       {prefix ? (
-        <span className={cn(base, tone(Boolean(error)), "flex items-center gap-1.5")}>
+        <span className={cn(base, tone(wrong), "flex items-center gap-1.5")}>
           <span aria-hidden className="flex-none select-none opacity-55">
             {prefix}
           </span>
@@ -62,7 +72,7 @@ export function TextField({
             id={name}
             name={name}
             type={type}
-            aria-invalid={Boolean(error)}
+            aria-invalid={wrong}
             aria-describedby={error ? errorId : hint ? hintId : undefined}
             aria-label={`${label}, ${prefix}`}
             className="w-full min-w-0 border-0 bg-transparent p-0 outline-none"
@@ -74,9 +84,9 @@ export function TextField({
           id={name}
           name={name}
           type={type}
-          aria-invalid={Boolean(error)}
+          aria-invalid={wrong}
           aria-describedby={error ? errorId : hint ? hintId : undefined}
-          className={cn(base, tone(Boolean(error)))}
+          className={cn(base, tone(wrong))}
           {...rest}
         />
       )}
@@ -98,7 +108,7 @@ export function SelectField({
 }: {
   name: string;
   label: string;
-  error?: string;
+  error?: React.ReactNode;
   options: { value: string; label: string }[];
   placeholder: string;
   className?: string;
@@ -185,7 +195,7 @@ export function RadioGroup({
 }: {
   name: string;
   label: string;
-  error?: string;
+  error?: React.ReactNode;
   options: { value: string; label: string }[];
   defaultValue?: string;
   className?: string;
@@ -251,7 +261,7 @@ export function Combobox({
   options: readonly string[];
   placeholder?: string;
   defaultValue?: string;
-  error?: string;
+  error?: React.ReactNode;
   className?: string;
 }) {
   const [query, setQuery] = useState(defaultValue ?? "");
@@ -403,7 +413,7 @@ function Label({
   );
 }
 
-function FieldError({ id, error }: { id: string; error?: string }) {
+function FieldError({ id, error }: { id: string; error?: React.ReactNode }) {
   if (!error) return null;
   return (
     <p id={id} className="mt-1 text-[0.78rem] font-medium text-coral">
