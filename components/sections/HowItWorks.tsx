@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { BadgeIndianRupee, CalendarCheck, MapPinned, ShieldCheck, Users } from "lucide-react";
+import { BadgeIndianRupee, CalendarCheck, MapPinned, Users } from "lucide-react";
 
 import { siteConfig } from "@/lib/data/siteConfig";
 
@@ -40,12 +39,6 @@ const STEPS = [
   },
 ];
 
-const ASSURANCES: { text: string; href?: string }[] = [
-  { text: "Refunds up to 90%, on a published schedule", href: "/cancellation-and-refund-policy" },
-  { text: "Trip cancelled by us? Full refund, always", href: "/cancellation-and-refund-policy" },
-  { text: "A named trip lead on every departure" },
-  { text: `Operating from Coimbatore since ${siteConfig.established}` },
-];
 
 export function HowItWorks() {
   return (
@@ -95,45 +88,6 @@ export function HowItWorks() {
           ))}
         </ol>
 
-        <div className="mt-16 rounded-3xl border border-cream/12 bg-cream/[0.04] p-6 md:p-8">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h3 className="flex items-center gap-2.5 font-display text-2xl tracking-tight">
-                <ShieldCheck className="h-5 w-5 flex-none text-teal" aria-hidden />
-                What you&apos;re covered by
-              </h3>
-              <ul className="mt-4 grid gap-x-8 gap-y-2 text-[0.92rem] text-cream/70 sm:grid-cols-2">
-                {ASSURANCES.map((a) => (
-                  <li key={a.text} className="flex items-start gap-2">
-                    <span
-                      aria-hidden
-                      className="mt-[0.55em] h-1 w-1 flex-none rounded-full bg-yellow"
-                    />
-                    {a.href ? (
-                      <Link
-                        href={a.href}
-                        className="underline decoration-cream/25 underline-offset-4 transition hover:text-cream hover:decoration-yellow"
-                      >
-                        {a.text}
-                      </Link>
-                    ) : (
-                      a.text
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="flex flex-none flex-col gap-2.5 sm:flex-row lg:flex-col">
-              <Link href="/trips" className="btn btn-yellow justify-center">
-                See upcoming trips
-              </Link>
-              <Link href="/pricing-details" className="btn btn-ghost justify-center">
-                How pricing works
-              </Link>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
   );
