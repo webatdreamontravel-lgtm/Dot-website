@@ -210,3 +210,97 @@ body {
 .prose-admin .ProseMirror p.is-editor-empty:first-child::before {
   content: "Start writing…"; color: #8b96ad; float: left; height: 0; pointer-events: none;
 }
+
+/* ── Admin date range picker ──
+   react-datepicker ships a functional but generic stylesheet; this pulls it
+   into the admin panel's palette. Scoped to .dot-datepicker, the
+   calendarClassName set in components/admin/DateRangeField.tsx, so the
+   library's defaults can't reach anything else. */
+.dot-datepicker.react-datepicker {
+  font-family: inherit;
+  font-size: 0.615rem;
+  border: 1px solid #e3e7ee;
+  border-radius: 0.75rem;
+  box-shadow: 0 12px 32px -12px rgba(15, 30, 61, 0.25);
+  overflow: hidden;
+  /* The library lays its months out with `float: left` inside an
+     inline-block, so the shrink-to-fit width can collapse and drop the second
+     month onto a new row. Flex puts them side by side unconditionally, which
+     is the only way to be sure both months are visible at once.
+     Navigation and the aria-live region are absolutely positioned, so they
+     take no flex space. */
+  display: inline-flex;
+  align-items: flex-start;
+}
+.dot-datepicker .react-datepicker__month-container { float: none; }
+.dot-datepicker .react-datepicker__header {
+  background: #fcfdfe;
+  border-bottom: 1px solid #eef1f6;
+  padding-top: 0.85em;
+}
+.dot-datepicker .react-datepicker__current-month {
+  font-weight: 600;
+  color: #16203a;
+  font-size: 1.05em;
+}
+.dot-datepicker .react-datepicker__day-name {
+  color: #8b96ad;
+  font-size: 0.83em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dot-datepicker .react-datepicker__day {
+  border-radius: 0.42em;
+  color: #16203a;
+}
+.dot-datepicker .react-datepicker__day:hover { background: #f1f4f8; }
+.dot-datepicker .react-datepicker__day--today { font-weight: 700; color: var(--color-teal); }
+.dot-datepicker .react-datepicker__day--outside-month { color: #b8c0cf; }
+.dot-datepicker .react-datepicker__day--disabled { color: #ccd3de; }
+.dot-datepicker .react-datepicker__day--disabled:hover { background: transparent; }
+
+/* The range itself: solid ends, tinted middle. */
+.dot-datepicker .react-datepicker__day--in-range,
+.dot-datepicker .react-datepicker__day--in-selecting-range {
+  background: color-mix(in srgb, var(--color-teal) 14%, white);
+  color: #16203a;
+  border-radius: 0;
+}
+.dot-datepicker .react-datepicker__day--selected,
+.dot-datepicker .react-datepicker__day--range-start,
+.dot-datepicker .react-datepicker__day--range-end,
+.dot-datepicker .react-datepicker__day--selecting-range-start,
+.dot-datepicker .react-datepicker__day--keyboard-selected {
+  background: var(--color-teal);
+  color: var(--color-cream);
+  font-weight: 600;
+}
+.dot-datepicker .react-datepicker__day--range-start,
+.dot-datepicker .react-datepicker__day--selecting-range-start {
+  border-radius: 0.42em 0 0 0.42em;
+}
+.dot-datepicker .react-datepicker__day--range-end { border-radius: 0 0.42em 0.42em 0; }
+.dot-datepicker .react-datepicker__day--selected:not(.react-datepicker__day--in-range) {
+  border-radius: 0.42em;
+}
+
+/* The nav buttons are a fixed 32px in the library, so they don't follow the
+   font-size the rest of the calendar scales from — shrunk to match. */
+.dot-datepicker .react-datepicker__navigation {
+  width: 24px;
+  height: 24px;
+  top: 6px;
+}
+.dot-datepicker .react-datepicker__navigation-icon::before {
+  border-color: #5a6785;
+  border-width: 1.5px 1.5px 0 0;
+  width: 6px;
+  height: 6px;
+}
+.dot-datepicker .react-datepicker__navigation:hover *::before { border-color: var(--color-navy); }
+.dot-datepicker .react-datepicker__month-container + .react-datepicker__month-container {
+  border-left: 1px solid #eef1f6;
+}
+/* The popper must clear the filter bar and the table header beneath it. */
+.react-datepicker-popper { z-index: 30; }

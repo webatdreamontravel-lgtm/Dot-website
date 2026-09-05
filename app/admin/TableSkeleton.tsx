@@ -63,7 +63,8 @@ export function TableSkeleton({
   );
 }
 
-function Bar({ className }: { className?: string }) {
+/** Exported so screens with a non-table shape can build a matching skeleton. */
+export function Bar({ className }: { className?: string }) {
   return (
     <span
       aria-hidden
