@@ -1,13 +1,15 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Calendar, Clock, MapPin, Users } from "lucide-react";
+import { ArrowRight, Calendar, Clock, MapPin, Users } from "lucide-react";
 import type { TripDetailView } from "@/lib/queries/trips";
 import { formatDateRange, formatINR, taxSuffix } from "@/lib/utils";
 
 export function TripHero({ trip }: { trip: TripDetailView }) {
   const slotsLeft = trip.seatsAvailable;
+  const isSoldOut = trip.availability === "SOLD_OUT";
 
   return (
     <section className="relative isolate overflow-hidden text-cream min-h-[90svh] flex flex-col">
@@ -70,6 +72,32 @@ export function TripHero({ trip }: { trip: TripDetailView }) {
               big
             />
           </motion.dl>
+
+          {/*
+            The one thing this page is for, reachable without reading it.
+
+            The offer used to live only at the very bottom, so someone who had
+            already decided — most people arriving from WhatsApp have — had to
+            scroll the whole itinerary to act on it. The sticky bar doesn't
+            help above the fold either: it only appears after 600px, which is
+            roughly where this hero ends.
+          */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.35 }}
+            className="mt-9"
+          >
+            {isSoldOut ? (
+              <span className="btn bg-cream/15 text-cream/60 border border-cream/20">
+                Sold out
+              </span>
+            ) : (
+              <Link href={`/trips/${trip.slug}/book`} className="btn btn-yellow">
+                Book now <ArrowRight className="h-4 w-4" />
+              </Link>
+            )}
+          </motion.div>
         </div>
       </div>
     </section>

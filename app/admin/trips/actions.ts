@@ -112,7 +112,9 @@ const schema = z
     gstPercent: z.coerce.number().int().min(0).max(100).default(5),
     tcsPercent: z.coerce.number().int().min(0).max(100).default(0),
 
-    razorpayEnabled: z.coerce.boolean().default(false),
+    // Defaults TRUE: the form no longer posts this field, and an absent
+    // checkbox must not silently switch a trip's payments off.
+    razorpayEnabled: z.coerce.boolean().default(true),
     autoCloseWhenFull: z.coerce.boolean().default(true),
     showSeatsLeft: z.coerce.boolean().default(true),
 
@@ -177,7 +179,7 @@ async function uniqueSlug(base: string, ignoreId?: string) {
 function parse(formData: FormData) {
   const raw = Object.fromEntries(formData.entries());
   // Unchecked checkboxes simply aren't in FormData, so absence means false.
-  for (const key of ["razorpayEnabled", "autoCloseWhenFull", "showSeatsLeft", "isFeatured"]) {
+  for (const key of ["autoCloseWhenFull", "showSeatsLeft", "isFeatured"]) {
     raw[key] = formData.get(key) === "on" ? "true" : "";
   }
   return schema.safeParse(raw);
@@ -233,56 +235,62 @@ function buildData(d: z.infer<typeof schema>) {
 }
 
 /**
- * Publish or unpublish a trip from the list, without opening the editor.
+ * The master on/off switch for a trip, from the list.
  *
- * "Active" on screen means status PUBLISHED — the one value every public
- * query filters on, so unpublishing takes the trip off the site, out of the
- * sitemap and out of the home page immediately.
+ * Deactivating does two things together, because they are one decision in
+ * practice: it clears `isActive` AND archives the trip. Keeping a switched-off
+ * trip sitting at "Live on site" was the confusing part — the badge claimed
+ * one thing and the site did another. Archived says what actually happened.
  *
- * Unpublishing deliberately does NOT touch bookings or seat counts. People
- * who already booked keep their booking and their /account link; the trip
- * simply stops being sellable. Cancelling a departure is a different
- * decision and goes through the bookings screen.
+ * Reactivating puts it back to PUBLISHED, but only if it is currently
+ * ARCHIVED. A DRAFT that gets switched on stays a DRAFT: it was never
+ * finished, and silently publishing half-written copy is a worse outcome than
+ * making someone set the status themselves.
+ *
+ * Neither direction touches bookings or seat counts. People who already
+ * booked keep their booking and their /account link; the trip simply stops
+ * being sellable. Cancelling a departure is a different decision and goes
+ * through the bookings screen.
  */
-export async function setTripPublished(
+export async function setTripActive(
   tripId: string,
-  publish: boolean,
+  active: boolean,
 ): Promise<{ error?: string }> {
   const admin = await requireAdmin();
 
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
-    select: { id: true, slug: true, status: true, title: true },
+    select: { id: true, slug: true, status: true, isActive: true },
   });
   if (!trip) return { error: "That trip no longer exists." };
+  if (trip.isActive === active) return {};
 
-  const next = publish ? "PUBLISHED" : "DRAFT";
-  if (trip.status === next) return {};
-
-  // Archived is a deliberate end state set in the editor, not something a
-  // list toggle should quietly undo.
-  if (trip.status === "ARCHIVED") {
-    return { error: "This trip is archived. Reopen it from the trip editor." };
-  }
+  const status = active
+    ? trip.status === "ARCHIVED"
+      ? ("PUBLISHED" as const)
+      : trip.status
+    : ("ARCHIVED" as const);
 
   await prisma.$transaction([
     prisma.trip.update({
       where: { id: tripId },
       data: {
-        status: next,
-        // Stamp the first publish; leave it alone afterwards so the date
-        // reflects when the trip actually went live, not the last toggle.
-        ...(publish ? { publishedAt: trip.status === "DRAFT" ? new Date() : undefined } : {}),
+        isActive: active,
+        status,
+        // Stamp the first time it actually goes live, and leave it alone
+        // afterwards — the date should say when the trip first appeared, not
+        // when it was last toggled.
+        ...(active && status === "PUBLISHED" ? { publishedAt: new Date() } : {}),
       },
     }),
     prisma.auditLog.create({
       data: {
         actorProfileId: admin.id,
-        action: publish ? "trip.publish" : "trip.unpublish",
+        action: active ? "trip.activate" : "trip.deactivate",
         entity: "trip",
         entityId: tripId,
-        before: { status: trip.status },
-        after: { status: next },
+        before: { isActive: trip.isActive, status: trip.status },
+        after: { isActive: active, status },
       },
     }),
   ]);

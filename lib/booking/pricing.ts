@@ -112,7 +112,26 @@ export function recalcForSeats(
  * zero-padded sequence within that trip.
  */
 export function buildReference(slug: string, startDate: Date, sequence: number) {
+  return `${referencePrefix(slug, startDate)}${String(sequence).padStart(4, "0")}`;
+}
+
+/**
+ * Everything before the sequence — "DOT-WA26-".
+ *
+ * Split out so the next sequence can be found by looking at the references
+ * that already exist, rather than by counting rows. Counting is wrong the
+ * moment a booking is deleted or a reference is skipped: four rows numbered
+ * 1, 2, 3, 5 make count() say 4, which collides with 5 and fails the unique
+ * index on `reference`.
+ */
+export function referencePrefix(slug: string, startDate: Date) {
   const letters = slug.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 2) || "DT";
   const year = String(startDate.getUTCFullYear()).slice(-2);
-  return `DOT-${letters}${year}-${String(sequence).padStart(4, "0")}`;
+  return `DOT-${letters}${year}-`;
+}
+
+/** Pulls the sequence back out of a reference. 0 if it isn't one of ours. */
+export function referenceSequence(reference: string): number {
+  const n = Number(reference.slice(reference.lastIndexOf("-") + 1));
+  return Number.isFinite(n) ? n : 0;
 }

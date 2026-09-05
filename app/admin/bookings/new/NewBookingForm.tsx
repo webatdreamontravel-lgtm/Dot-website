@@ -1,11 +1,14 @@
 "use client";
 
+import { PhoneInput } from "@/components/shared/PhoneInput";
+
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { AlertCircle, Check, Loader2, Minus, Plus, Search, UserPlus, X } from "lucide-react";
 
 import { toRupees } from "@/lib/booking/pricing";
 import { DEFAULT_STATE, TAMIL_NADU_CITIES } from "@/lib/data/indianStates";
+import { sanitiseAmountInput } from "@/lib/money";
 import { formatINR } from "@/lib/utils";
 import { Panel } from "../../ui";
 import { createBookingForCustomer, findCustomers, type CustomerHit } from "./actions";
@@ -56,7 +59,25 @@ export function NewBookingForm({
   const [status, setStatus] = useState("REQUESTED");
   const [notes, setNotes] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
+
   const [paymentMethod, setPaymentMethod] = useState("CASH");
+
+  /**
+   * Travel credit is a payment METHOD, not a second amount field.
+   *
+   * The earlier design put a credit box beside the customer, which asked the
+   * admin to think about two pots of money before they had decided what was
+   * being paid at all. "How did they pay? With their credit." is the same
+   * sentence as "with cash", and belongs in the same control.
+   *
+   * The trade is that one booking can only be created with one method —
+   * splitting credit and cash means saving, then recording the second
+   * payment on the booking screen.
+   */
+  const creditAvailable = picked?.creditPaise ?? 0;
+  const payingByCredit = paymentMethod === "CREDIT";
+  const paymentPaise = Math.round((Number(paymentAmount) || 0) * 100);
+  const overCredit = payingByCredit && paymentPaise > creditAvailable;
   const [paymentReference, setPaymentReference] = useState("");
 
   // Debounced search — one request per pause in typing, not per keystroke.
@@ -117,6 +138,14 @@ export function NewBookingForm({
 
   const submit = () => {
     setError(null);
+    // Caught here as well as on the server: the server's refusal is correct
+    // but arrives after the seats have been held and released again.
+    if (overCredit) {
+      setError(
+        `Only ${formatINR(toRupees(creditAvailable))} of travel credit is available.`,
+      );
+      return;
+    }
     start(async () => {
       const result = await createBookingForCustomer({
         tripId,
@@ -212,7 +241,9 @@ export function NewBookingForm({
                   </p>
                 </div>
               </div>
-            ) : creating ? (
+            ) : null}
+
+            {picked ? null : creating ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Full name" className="sm:col-span-2">
                   <input value={fresh.fullName} onChange={(e) => setFresh({ ...fresh, fullName: e.target.value })} className={control} placeholder="As on their ID" />
@@ -221,7 +252,11 @@ export function NewBookingForm({
                   <input value={fresh.email} onChange={(e) => setFresh({ ...fresh, email: e.target.value })} type="email" className={control} placeholder="they@example.com" />
                 </Field>
                 <Field label="Phone">
-                  <input value={fresh.phone} onChange={(e) => setFresh({ ...fresh, phone: e.target.value })} type="tel" className={control} placeholder="10-digit mobile" />
+                  <PhoneInput
+                    value={fresh.phone}
+                    onChange={(v) => setFresh({ ...fresh, phone: v })}
+                    className={control}
+                  />
                 </Field>
                 <Field label="City">
                   <select value={fresh.city} onChange={(e) => setFresh({ ...fresh, city: e.target.value })} className={control}>
@@ -276,6 +311,15 @@ export function NewBookingForm({
                             {[h.phone, h.email].filter(Boolean).join(" · ")}
                             {h.bookings > 0 && ` · ${h.bookings} booking${h.bookings === 1 ? "" : "s"}`}
                           </span>
+                          {/* On the row, not just after selection: the whole
+                              point of credit is that it gets used, and it
+                              only gets used if it is visible at the moment
+                              someone is choosing who they are booking for. */}
+                          {h.creditPaise > 0 && (
+                            <span className="mt-0.5 inline-block rounded-full bg-[#eaf4ef] px-2 py-0.5 text-[0.72rem] font-semibold text-[#0f7a55]">
+                              {formatINR(toRupees(h.creditPaise))} travel credit
+                            </span>
+                          )}
                         </button>
                       </li>
                     ))}
@@ -342,7 +386,11 @@ export function NewBookingForm({
                   </p>
                   <div className="grid gap-2.5 sm:grid-cols-3">
                     <input value={t.fullName} onChange={(e) => patchTraveller(i, { fullName: e.target.value })} placeholder="Full name" className={control} />
-                    <input value={t.phone} onChange={(e) => patchTraveller(i, { phone: e.target.value })} placeholder="Phone" className={control} />
+                    <PhoneInput
+                      value={t.phone}
+                      onChange={(v) => patchTraveller(i, { phone: v })}
+                      className={control}
+                    />
                     <input value={t.email} onChange={(e) => patchTraveller(i, { email: e.target.value })} placeholder="Email" className={control} />
                   </div>
                 </div>
@@ -351,7 +399,106 @@ export function NewBookingForm({
           </div>
         </Panel>
 
-        <Panel title="4 · How it came in">
+        <Panel title="4 · Money taken now (optional)">
+          <div className="px-5 py-4">
+            {/* Above the fields, and shown whether or not credit is the
+                chosen method.
+                
+                Hiding it until someone picks "Travel credit" from a dropdown
+                means it is only found by people who already knew to look —
+                which is nobody, since the whole point is that a cancellation
+                weeks ago left money behind. Credit that goes unnoticed never
+                gets spent. */}
+            {creditAvailable > 0 && (
+              <div
+                className={`mb-3 rounded-xl border px-4 py-3 ${
+                  overCredit
+                    ? "border-[#f0c9c4] bg-[#fdf2f0]"
+                    : "border-[#d7e8e2] bg-[#f2f9f6]"
+                }`}
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-[0.87rem] text-[#16203a]">
+                    <strong>{picked?.fullName ?? "This customer"}</strong> has{" "}
+                    <strong>{formatINR(toRupees(creditAvailable))}</strong> of travel credit.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentMethod("CREDIT");
+                      setPaymentAmount(String(creditAvailable / 100));
+                    }}
+                    className="text-[0.8rem] font-medium text-[#0f7a55] underline underline-offset-2"
+                  >
+                    {payingByCredit ? "Use all of it" : "Use it"}
+                  </button>
+                </div>
+
+                {overCredit ? (
+                  <p className="mt-1.5 text-[0.8rem] font-medium text-[#b3261e]">
+                    That&apos;s more than they have. The most you can apply is{" "}
+                    {formatINR(toRupees(creditAvailable))}.
+                  </p>
+                ) : payingByCredit ? (
+                  <p className="mt-1.5 text-[0.78rem] text-[#5a6785]">
+                    Recorded as a payment on this booking. Anything left stays as credit.
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-[0.78rem] text-[#5a6785]">
+                    Choose <strong>Travel credit</strong> as the method to put it towards this
+                    booking.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Amount">
+                <input
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(sanitiseAmountInput(e.target.value))}
+                  inputMode="decimal"
+                  placeholder="Leave blank if none"
+                  className={control}
+                />
+              </Field>
+              <Field label="Method">
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className={control}
+                >
+                  <option value="CASH">Cash</option>
+                  <option value="UPI_MANUAL">UPI</option>
+                  <option value="BANK_TRANSFER">Bank transfer</option>
+                  {/* Only offered when there is credit to spend. An option
+                      that always errors is worse than one that isn't there. */}
+                  {creditAvailable > 0 && (
+                    <option value="CREDIT">
+                      Travel credit — {formatINR(toRupees(creditAvailable))} available
+                    </option>
+                  )}
+                  <option value="OTHER">Other</option>
+                </select>
+              </Field>
+              <Field label="Reference / UTR">
+                <input
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  placeholder="Optional"
+                  className={control}
+                  disabled={payingByCredit}
+                />
+              </Field>
+            </div>
+
+            <p className="mt-2 text-[0.78rem] text-[#8b96ad]">
+              Recording money here confirms the booking automatically.
+            </p>
+          </div>
+        </Panel>
+
+        <Panel title="5 · How it came in">
           <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
             <Field label="Source">
               <select value={source} onChange={(e) => setSource(e.target.value)} className={control}>
@@ -367,33 +514,12 @@ export function NewBookingForm({
                 <option value="CONFIRMED">Confirmed</option>
               </select>
             </Field>
-            <Field label="Internal notes" className="sm:col-span-2">
+            <Field label="Admin notes" className="sm:col-span-2">
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={control} />
             </Field>
           </div>
         </Panel>
 
-        <Panel title="5 · Money taken now (optional)">
-          <div className="grid gap-3 px-5 py-4 sm:grid-cols-3">
-            <Field label="Amount">
-              <input value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} inputMode="decimal" placeholder="Leave blank if none" className={control} />
-            </Field>
-            <Field label="Method">
-              <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className={control}>
-                <option value="CASH">Cash</option>
-                <option value="UPI_MANUAL">UPI</option>
-                <option value="BANK_TRANSFER">Bank transfer</option>
-                <option value="OTHER">Other</option>
-              </select>
-            </Field>
-            <Field label="Reference / UTR">
-              <input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="Optional" className={control} />
-            </Field>
-            <p className="sm:col-span-3 text-[0.78rem] text-[#8b96ad]">
-              Recording money here confirms the booking automatically.
-            </p>
-          </div>
-        </Panel>
       </div>
 
       <aside className="lg:sticky lg:top-6">
