@@ -3,7 +3,7 @@
 # releases onto the EC2 box, reloading the PM2 process that already runs there.
 #
 #   build   npm ci -> prisma migrate deploy -> next build -> standalone tarball
-#           -> s3://$S3_BUCKET/releases/<timestamp>-<sha>.tar.gz
+#           -> s3://dot-prod-builds/releases/<timestamp>-<sha>.tar.gz
 #   deploy  presign the tarball -> SSH in -> unpack beside the app dir ->
 #           swap it into place -> pm2 reload -> health check
 #           -> swap the previous directory back if it fails
@@ -75,12 +75,41 @@ jobs:
           ${{ secrets.PRODUCTION_ENV }}
           DOT_ENV_EOF
 
+          # A secret pasted from Windows or from some editors carries CRLF.
+          # grep still matches, but the \r ends up INSIDE the value, so the
+          # database URL gets a stray carriage return and the connection fails
+          # with something that looks nothing like the real cause.
+          sed -i 's/\r$//' .env
+
           # NEXT_PUBLIC_* is inlined by the bundler, so this is welded to the
           # artifact and reported by /api/health.
           echo "NEXT_PUBLIC_RELEASE_SHA=$RELEASE_ID" >> .env
 
-          grep -q '^DATABASE_URL=' .env || { echo "::error::PRODUCTION_ENV secret has no DATABASE_URL"; exit 1; }
-          grep -q '^DIRECT_URL=' .env   || { echo "::error::PRODUCTION_ENV secret has no DIRECT_URL"; exit 1; }
+          # Diagnostics before the check, because "no DATABASE_URL" on its own
+          # gives you nowhere to go. Key NAMES are printed, never values —
+          # everything to the right of the first `=` stays out of the log.
+          echo "· .env lines            : $(wc -l < .env | tr -d ' ')"
+          echo "· keys found            : $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '=' | tr '\n' ' ')"
+
+          if ! grep -q '^DATABASE_URL=' .env; then
+            # Distinguish the three ways this actually happens, because the fix
+            # is different for each.
+            # Indent check FIRST: indented lines don't match ^[A-Za-z_] either,
+            # so the empty test below would otherwise swallow this case and
+            # send you looking for a secret that is actually there.
+            if grep -qE '^[[:space:]]+DATABASE_URL=' .env; then
+              echo "::error::PRODUCTION_ENV has DATABASE_URL but its lines are INDENTED. Re-paste the secret with every line starting at column 0."
+            elif [ ! -s .env ] || [ "$(grep -c '^[A-Za-z_]' .env)" -le 1 ]; then
+              echo "::error::The PRODUCTION_ENV secret appears to be empty or unset. Add it under Settings → Secrets and variables → Actions."
+            elif grep -q 'DATABASE_URL' .env; then
+              echo "::error::PRODUCTION_ENV mentions DATABASE_URL but not as a line of its own — check for a stray prefix such as 'export '."
+            else
+              echo "::error::PRODUCTION_ENV secret has no DATABASE_URL. It must contain the full .env, one KEY=value per line."
+            fi
+            exit 1
+          fi
+
+          grep -q '^DIRECT_URL=' .env || { echo "::error::PRODUCTION_ENV secret has no DIRECT_URL"; exit 1; }
           echo "Loaded $(grep -c '^[A-Za-z_]' .env) variables."
 
       - name: Install dependencies
@@ -142,10 +171,12 @@ jobs:
       - name: Upload release to S3
         id: upload
         env:
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          # Set the S3_BUCKET repository variable to override.
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
           RELEASE_ID: ${{ steps.release.outputs.release_id }}
         run: |
           set -euo pipefail
+          [ -n "$S3_BUCKET" ] || { echo "::error::S3_BUCKET is empty"; exit 1; }
           KEY="releases/${RELEASE_ID}.tar.gz"
 
           aws s3 cp release.tar.gz "s3://${S3_BUCKET}/${KEY}" \
@@ -185,10 +216,12 @@ jobs:
         # The EC2 box needs no AWS credentials or instance role this way — it
         # just curls a URL that stops working in an hour.
         env:
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          # Set the S3_BUCKET repository variable to override.
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
           S3_KEY: ${{ needs.build.outputs.s3_key }}
         run: |
           set -euo pipefail
+          [ -n "$S3_BUCKET" ] || { echo "::error::S3_BUCKET is empty"; exit 1; }
           URL="$(aws s3 presign "s3://${S3_BUCKET}/${S3_KEY}" --expires-in 3600)"
           # It is a bearer credential for the artifact until it expires.
           echo "::add-mask::$URL"
