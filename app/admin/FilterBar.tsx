@@ -22,12 +22,24 @@ export function FilterBar({
   action,
   hasFilters,
   searchPlaceholder,
+  evenFields = false,
   children,
   table,
 }: {
   action: string;
   hasFilters: boolean;
   searchPlaceholder: string;
+  /**
+   * Makes the search box share the row equally with the other fields instead
+   * of absorbing all of the slack.
+   *
+   * By default search takes what's left, which is right when it is the main
+   * filter. On screens where the real control is something wider — a date
+   * range, say — that leaves search sprawling and the important field
+   * squeezed. With this set, search and any sibling field carrying `flex-1`
+   * and the same min-width divide the row between them.
+   */
+  evenFields?: boolean;
   /** The filter fields, beyond the search box. */
   children?: React.ReactNode;
   /** The table (or empty state) this bar filters. */
@@ -66,7 +78,15 @@ export function FilterBar({
         }}
         className="flex flex-wrap items-end gap-2.5 border-b border-[#e3e7ee] bg-[#fcfdfe] px-5 py-3.5"
       >
-        <label className="flex min-w-[240px] flex-1 flex-col gap-1">
+        <label
+          className={
+            // flex-1 is `flex: 1 1 0%`, so two siblings that both carry it and
+            // share a min-width divide the space evenly — that is what makes
+            // the 50/50 split hold rather than approximately hold.
+            "flex flex-col gap-1 " +
+            (evenFields ? "min-w-[190px] flex-1" : "min-w-[240px] flex-1")
+          }
+        >
           <span className="text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[#8b96ad]">
             Search
           </span>

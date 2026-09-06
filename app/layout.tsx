@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { fraunces, inter, caveat } from "@/lib/fonts";
 import { legalConfig, siteConfig } from "@/lib/data/siteConfig";
 import { siteUrl } from "@/lib/siteUrl";
+import { Analytics } from "@/components/shared/Analytics";
+import { ClarityAnalytics } from "@/components/shared/Clarity";
 import { CursorFollower } from "@/components/shared/CursorFollower";
 import "./globals.css";
 
@@ -90,6 +92,8 @@ export default function RootLayout({
       className={`${fraunces.variable} ${inter.variable} ${caveat.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-cream text-navy">
+        <Analytics />
+        <ClarityAnalytics />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
