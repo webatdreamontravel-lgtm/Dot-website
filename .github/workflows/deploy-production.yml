@@ -237,10 +237,35 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
 
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          # printf adds the trailing newline OpenSSH requires after the END
+          # line; tr strips CR, because a key pasted through a Windows editor
+          # or some browsers carries CRLF and every line then fails to parse
+          # with a bare "error in libcrypto".
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null \
-            || { echo "::error::EC2_SSH_PRIVATE_KEY is not a valid private key. Paste the whole PEM including the BEGIN/END lines."; exit 1; }
+
+          # -P '' so a passphrase-protected key fails immediately instead of
+          # blocking on a prompt that no one can answer on a runner.
+          if ! ssh-keygen -y -P '' -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            first="$(head -1 ~/.ssh/deploy_key)"
+            last="$(tail -1 ~/.ssh/deploy_key)"
+            echo "· first line: ${first:0:40}"
+            echo "· last line : ${last:0:40}"
+            echo "· lines     : $(wc -l < ~/.ssh/deploy_key | tr -d ' ')"
+
+            case "$first" in
+              *"PuTTY-User-Key-File"*)
+                echo "::error::That is a PuTTY .ppk key. Convert it: PuTTYgen → Load → Conversions → Export OpenSSH key." ;;
+              "ssh-rsa "*|"ssh-ed25519 "*|"ecdsa-sha2-"*)
+                echo "::error::That is the PUBLIC key. EC2_SSH_PRIVATE_KEY needs the private half — the file WITHOUT the .pub extension." ;;
+              *"BEGIN"*"PRIVATE KEY"*)
+                echo "::error::The key header is right but it could not be parsed. Most likely it is passphrase-protected (this must be a key with no passphrase), or lines were lost/wrapped when pasting." ;;
+              *)
+                echo "::error::EC2_SSH_PRIVATE_KEY does not look like a private key. Paste the whole file including the -----BEGIN/END----- lines." ;;
+            esac
+            exit 1
+          fi
+          echo "· key type  : $(ssh-keygen -l -f ~/.ssh/deploy_key | awk '{print $4, $2}')"
 
           if [ -n "$KNOWN_HOSTS" ]; then
             printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
