@@ -177,13 +177,18 @@ jobs:
 
           printf '%s\n' "$SSH_KEY" \
             | tr -d '\r' \
-            | sed -e '/./,$!d' -e 's/[[:space:]]*$//' > ~/.ssh/deploy_key
+            | sed -e '/./,$!d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+
+          if [ -z "$(tr -d '[:space:]' < ~/.ssh/deploy_key)" ]; then
+            echo "::error::EC2_SSH_PRIVATE_KEY is empty — the secret is not set, or not visible to this job. It must be a REPOSITORY secret (Settings → Secrets and variables → Actions → Secrets → Repository secrets), not an Environment secret."
+            exit 1
+          fi
 
           if ! ssh-keygen -y -P '' -f ~/.ssh/deploy_key >/dev/null 2>&1; then
             first="$(grep -m1 . ~/.ssh/deploy_key || true)"
             last="$(grep . ~/.ssh/deploy_key | tail -1 || true)"
-            lines="$(grep -c . ~/.ssh/deploy_key || echo 0)"
+            lines="$(grep -c . ~/.ssh/deploy_key || true)"
             echo "· first line: ${first:0:40}"
             echo "· last line : ${last:0:40}"
             echo "· lines     : $lines"
@@ -199,7 +204,13 @@ jobs:
               "ssh-rsa "*|"ssh-ed25519 "*|"ecdsa-sha2-"*)
                 echo "::error::That is the PUBLIC key. EC2_SSH_PRIVATE_KEY needs the private half — the file WITHOUT the .pub extension." ;;
               *"BEGIN"*"PRIVATE KEY"*)
-                echo "::error::The key header is right but it could not be parsed. Most likely it is passphrase-protected (this must be a key with no passphrase), or lines were lost/wrapped when pasting." ;;
+                if grep -qE 'Proc-Type:.*ENCRYPTED|DEK-Info:' ~/.ssh/deploy_key; then
+                  echo "::error::The key is PASSPHRASE-PROTECTED. Strip it with: ssh-keygen -p -P '<current>' -N '' -f key.pem — then re-paste."
+                elif ! grep -q 'END.*PRIVATE KEY' ~/.ssh/deploy_key; then
+                  echo "::error::The key is TRUNCATED — no -----END … PRIVATE KEY----- line. Re-copy the whole file; the last line is easy to miss when selecting."
+                else
+                  echo "::error::Header and footer are present but the body will not parse. Re-copy with 'pbcopy < key.pem' (or 'xclip -sel c < key.pem') rather than selecting text, which can drop or alter characters." ;
+                fi ;;
               *)
                 echo "::error::EC2_SSH_PRIVATE_KEY does not look like a private key. Paste the whole file including the -----BEGIN/END----- lines." ;;
             esac
