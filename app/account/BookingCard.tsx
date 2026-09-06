@@ -107,12 +107,12 @@ export function BookingCard({
               title into an extra line — the two shortest things sit together
               and the title gets the full width beneath them. */}
           <div className="flex items-center gap-3">
-            <p className="min-w-0 flex-1 truncate font-mono text-[0.7rem] uppercase tracking-wider text-navy/35">
+            <p className="min-w-0 flex-1 truncate font-mono text-[0.75rem] uppercase tracking-wider text-navy/35">
               {booking.reference}
             </p>
             <span
               className={cn(
-                "inline-flex flex-none rounded-full px-2.5 py-1 text-[0.72rem] font-semibold",
+                "inline-flex flex-none rounded-full px-2.5 py-1 text-[0.75rem] font-semibold",
                 status.tone,
               )}
             >

@@ -70,7 +70,7 @@ export default async function AccountPage({ searchParams }: { searchParams: SP }
 
           <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
             <div className="min-w-0">
-              <h1 className="font-display text-4xl tracking-tight text-navy md:text-5xl">
+              <h1 className="font-display text-3xl tracking-tight text-navy md:text-5xl">
                 Your trips
               </h1>
               <p className="mt-1.5 truncate text-navy/60">

@@ -251,7 +251,7 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                         total that used to cover three reads as a billing
                         error until you can see which person came off. */}
                     {t.cancelledAt && (
-                      <span className="rounded-full bg-navy/[0.07] px-2 py-0.5 text-[0.7rem] font-semibold uppercase tracking-wide text-navy/50">
+                      <span className="rounded-full bg-navy/[0.07] px-2 py-0.5 text-[0.75rem] font-semibold uppercase tracking-wide text-navy/50">
                         Cancelled
                       </span>
                     )}

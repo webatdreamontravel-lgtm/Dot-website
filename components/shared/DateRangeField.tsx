@@ -90,7 +90,7 @@ export function DateRangeField({
         className={
           isPublic
             ? "text-[0.75rem] font-semibold uppercase tracking-[0.12em] text-navy/65"
-            : "text-[0.72rem] font-semibold uppercase tracking-[0.08em] text-[#8b96ad]"
+            : "text-[0.75rem] font-semibold uppercase tracking-[0.08em] text-[#8b96ad]"
         }
       >
         {label}

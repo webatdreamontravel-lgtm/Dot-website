@@ -42,7 +42,7 @@ export default async function BookTripPage({ params }: Params) {
             <ArrowLeft className="h-3.5 w-3.5" /> Back to {trip.title}
           </Link>
 
-          <h1 className="mt-3 font-display text-4xl tracking-tight text-navy md:text-5xl">
+          <h1 className="mt-3 font-display text-3xl tracking-tight text-navy md:text-5xl">
             Book your seat
           </h1>
           <p className="mt-1.5 text-navy/60">

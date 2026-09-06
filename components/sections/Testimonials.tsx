@@ -27,7 +27,7 @@ export function Testimonials({ reviews }: { reviews: ReviewView[] }) {
           >
             Stories from the road
           </motion.p>
-          <AnimatedHeading className="mt-2 text-5xl md:text-7xl">
+          <AnimatedHeading className="mt-2 text-4xl md:text-7xl">
             What our travelers <span className="italic text-coral">say</span>
           </AnimatedHeading>
         </div>
@@ -62,7 +62,7 @@ export function Testimonials({ reviews }: { reviews: ReviewView[] }) {
                 <p className="font-medium leading-tight">{t.authorName}</p>
                 <p className="text-sm text-navy/55">{t.tripTitle}</p>
                 {t.isVerified && (
-                  <p className="mt-1 text-[0.68rem] font-semibold uppercase tracking-wider text-teal">
+                  <p className="mt-1 text-[0.75rem] font-semibold uppercase tracking-wider text-teal">
                     ✓ Verified traveller
                   </p>
                 )}

@@ -68,7 +68,7 @@ export function StickyTripBar({ trip }: { trip: TripDetailView }) {
             className="md:hidden fixed inset-x-0 bottom-0 z-40 bg-cream border-t border-navy/10 px-4 py-3 flex items-center gap-3 shadow-[0_-12px_32px_-12px_rgba(15,30,61,0.2)]"
           >
             <div className="flex-1">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-navy/55">From</p>
+              <p className="text-[0.75rem] uppercase tracking-[0.18em] text-navy/55">From</p>
               <p className="font-display text-xl leading-tight">{formatINR(minPrice)}</p>
             </div>
             {isSoldOut ? (

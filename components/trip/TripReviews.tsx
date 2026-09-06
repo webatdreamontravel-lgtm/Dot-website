@@ -25,7 +25,7 @@ export function TripReviews({ reviews }: { reviews: TripReview[] }) {
         )}
       >
         <p className="font-script text-2xl text-teal">From this trip</p>
-        <AnimatedHeading className="mt-1 mb-12 text-5xl md:text-6xl">
+        <AnimatedHeading className="mt-1 mb-12 text-4xl md:text-6xl">
           {solo ? "What a traveller " : "What travellers "}
           <span className="italic text-coral">said</span>
         </AnimatedHeading>
@@ -47,7 +47,7 @@ function SoloReview({ review }: { review: TripReview }) {
           they wrap, just tinted. A free-floating decorative glyph collides
           with the first line at every text length that isn't the one you
           designed against. */}
-      <blockquote className="font-display text-[1.75rem] leading-[1.2] tracking-tight text-balance text-navy md:text-[2.75rem]">
+      <blockquote className="font-display text-[1.75rem] leading-[1.2] tracking-tight text-balance text-navy md:text-4xl">
         <span className="text-yellow">&ldquo;</span>
         {review.body}
         <span className="text-yellow">&rdquo;</span>

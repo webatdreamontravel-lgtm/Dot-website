@@ -38,7 +38,7 @@ export function UpcomingTrips({ trips }: { trips: TripCardView[] }) {
             </motion.p>
             <AnimatedHeading
               as="h2"
-              className="mt-2 text-5xl md:text-7xl"
+              className="mt-2 text-4xl md:text-7xl"
             >
               Where we&apos;re <span className="italic text-teal">heading</span> next
             </AnimatedHeading>

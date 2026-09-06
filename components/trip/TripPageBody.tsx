@@ -59,7 +59,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
         <section className="bg-cream-soft py-24 md:py-32">
           <div className="mx-auto max-w-5xl px-4 md:px-8">
             <p className="font-script text-2xl text-coral">Day by day →</p>
-            <AnimatedHeading className="mt-1 text-5xl md:text-7xl mb-12">
+            <AnimatedHeading className="mt-1 text-4xl md:text-7xl mb-12">
               The <span className="italic text-teal">itinerary</span>
             </AnimatedHeading>
             <ItineraryAccordion days={trip.itinerary} />
@@ -70,7 +70,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
       {(!isEmptyDoc(trip.inclusions) || !isEmptyDoc(trip.exclusions)) && (
         <section className="bg-cream py-24 md:py-28">
           <div className="mx-auto max-w-5xl px-4 md:px-8">
-            <AnimatedHeading className="text-5xl md:text-6xl mb-10">
+            <AnimatedHeading className="text-4xl md:text-6xl mb-10">
               What&apos;s in, what&apos;s <span className="italic">out</span>
             </AnimatedHeading>
             <div className="grid gap-5 md:grid-cols-2">
@@ -98,7 +98,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
       {!isEmptyDoc(trip.thingsToKnow) && (
         <section className="bg-cream-soft py-24 md:py-28">
           <div className="mx-auto max-w-4xl px-4 md:px-8">
-            <AnimatedHeading className="text-5xl md:text-6xl mb-10">
+            <AnimatedHeading className="text-4xl md:text-6xl mb-10">
               Things to <span className="italic text-teal">know</span>
             </AnimatedHeading>
             <RichText doc={trip.thingsToKnow} />
@@ -110,7 +110,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
         <section className="bg-cream py-24 md:py-28">
           <div className="mx-auto max-w-5xl px-4 md:px-8">
             <p className="font-script text-2xl text-coral">The numbers</p>
-            <AnimatedHeading className="mt-1 text-5xl md:text-6xl mb-10">Pricing</AnimatedHeading>
+            <AnimatedHeading className="mt-1 text-4xl md:text-6xl mb-10">Pricing</AnimatedHeading>
             <PricingTable tiers={trip.pricingTiers} gst={trip.gstPercent} tcs={trip.tcsPercent} />
           </div>
         </section>
@@ -126,7 +126,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
         <div className="grain opacity-[0.05]" aria-hidden />
         <div className="relative mx-auto max-w-3xl px-4 md:px-8 text-center">
           <p className="font-script text-2xl text-yellow">Lock your slot</p>
-          <AnimatedHeading className="mt-2 text-5xl md:text-7xl">
+          <AnimatedHeading className="mt-2 text-4xl md:text-7xl">
             {trip.advance ? (
               <>
                 Pay {formatINR(payNow)} <span className="italic">advance</span>

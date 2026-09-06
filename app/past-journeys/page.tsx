@@ -18,10 +18,10 @@ export default function PastJourneysPage() {
       <main className="bg-cream pt-32 md:pt-40 pb-24">
         <div className="mx-auto max-w-7xl px-6 md:px-8">
           <p className="font-script text-2xl text-coral">Memories on rewind →</p>
-          <AnimatedHeading as="h1" className="mt-2 text-5xl md:text-8xl">
+          <AnimatedHeading as="h1" className="mt-2 text-4xl md:text-8xl">
             Pages from our <span className="italic text-teal">journey</span>
           </AnimatedHeading>
-          <p className="mt-6 max-w-2xl text-lg text-navy/65">
+          <p className="mt-6 max-w-2xl text-base text-navy/65 md:text-lg">
             Every trip is its own little universe. Here are some of the ones our community has lived through.
           </p>
 

@@ -30,7 +30,7 @@ export function ItineraryAccordion({ days }: { days: ItineraryDay[] }) {
                 <div className="flex items-start gap-3 md:gap-6">
                   <div className="flex-shrink-0">
                     <div className="relative h-14 w-14 md:h-16 md:w-16 rounded-2xl bg-navy text-cream flex flex-col items-center justify-center font-display group-data-[state=open]:bg-teal transition-colors">
-                      <span className="text-[10px] uppercase tracking-[0.18em] opacity-70">Day</span>
+                      <span className="text-[0.75rem] uppercase tracking-[0.18em] opacity-70">Day</span>
                       <span className="text-2xl leading-none">{day.dayNumber}</span>
                       <span className="absolute inset-0 rounded-2xl ring-2 ring-yellow opacity-0 group-data-[state=open]:opacity-100 group-data-[state=open]:animate-ping" />
                     </div>

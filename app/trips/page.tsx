@@ -114,10 +114,10 @@ export default async function TripsListingPage({
           heading={
             <>
               <p className="font-script text-2xl text-yellow">Vaanga, polama →</p>
-              <AnimatedHeading as="h1" className="mt-2 text-5xl text-cream md:text-7xl">
+              <AnimatedHeading as="h1" className="mt-2 text-4xl text-cream md:text-7xl">
                 All upcoming <span className="italic text-yellow">trips</span>
               </AnimatedHeading>
-              <p className="mt-5 max-w-xl text-lg text-cream/85">
+              <p className="mt-5 max-w-xl text-base text-cream/85 md:text-lg">
                 Pick a date, pack a bag. We&apos;ve scouted every one of these so you
                 don&apos;t have to.
               </p>

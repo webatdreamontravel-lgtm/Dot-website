@@ -50,7 +50,11 @@ export function TripHero({ trip }: { trip: TripDetailView }) {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.1 }}
             className="font-display tracking-tight leading-[0.92] mt-3"
-            style={{ fontSize: "clamp(2.75rem, 8vw, 6.5rem)" }}
+            // Floor lowered from 2.75rem to match the homepage hero: the clamp
+            // pinned trip titles to 44px at 375px, and a name like "Mom &
+            // Kutties Getaway" then ran to four lines. vw term and desktop
+            // ceiling untouched.
+            style={{ fontSize: "clamp(2.25rem, 8vw, 6.5rem)" }}
           >
             {trip.title}
           </motion.h1>

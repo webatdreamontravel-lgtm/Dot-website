@@ -450,7 +450,7 @@ export function BookingForm({
             <dl className="mt-6 flex flex-col gap-px overflow-hidden rounded-2xl border border-navy/10">
               {travellers.map((t, i) => (
                 <div key={i} className="bg-white px-4 py-3">
-                  <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
+                  <dt className="text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
                     Traveller {i + 1}
                   </dt>
                   <dd className="mt-0.5 font-medium text-navy">
@@ -468,7 +468,7 @@ export function BookingForm({
               ))}
               {(emergencyName || emergencyPhone) && (
                 <div className="bg-white px-4 py-3">
-                  <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
+                  <dt className="text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
                     Emergency contact
                   </dt>
                   <dd className="mt-0.5 text-navy">
@@ -478,7 +478,7 @@ export function BookingForm({
               )}
               {notes && (
                 <div className="bg-white px-4 py-3">
-                  <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
+                  <dt className="text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
                     Notes
                   </dt>
                   <dd className="mt-0.5 whitespace-pre-line text-[0.9rem] text-navy/75">{notes}</dd>
@@ -542,7 +542,7 @@ function Steps({ step }: { step: 1 | 2 }) {
         <li key={s.n} className="flex items-center gap-2">
           <span
             className={cn(
-              "grid h-6 w-6 place-items-center rounded-full text-[0.72rem] font-bold",
+              "grid h-6 w-6 place-items-center rounded-full text-[0.75rem] font-bold",
               step >= s.n ? "bg-navy text-cream" : "bg-navy/10 text-navy/45",
             )}
           >
@@ -616,7 +616,7 @@ function PriceSummary({
         {canChoose && (
           <fieldset className="border-t border-cream/10 bg-cream/[0.04] px-6 py-4">
             <legend className="sr-only">How much to pay now</legend>
-            <p className="mb-2.5 text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-cream/45">
+            <p className="mb-2.5 text-[0.75rem] font-semibold uppercase tracking-[0.1em] text-cream/45">
               Pay now
             </p>
             <div className="flex flex-col gap-2">

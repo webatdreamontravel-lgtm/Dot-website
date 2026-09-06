@@ -405,7 +405,7 @@ function Label({
         {label}
       </label>
       {hint && (
-        <span id={hintId} className="text-[0.73rem] text-navy/40">
+        <span id={hintId} className="text-[0.75rem] text-navy/40">
           {hint}
         </span>
       )}
