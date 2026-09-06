@@ -71,25 +71,24 @@ export default async function BookTripPage({ params }: Params) {
 }
 
 /**
- * What a visitor sees before signing in: the exact, itemised amount, then the
- * account step.
+ * What a visitor sees before signing in: what a seat costs, then the account
+ * step.
  *
- * Showing the full breakdown here rather than after login is the whole point —
- * GST and TCS are real money, and finding out about them three screens deep is
- * the kind of surprise that loses the booking and earns the chargeback.
+ * One figure, all in — not the tax breakdown. The breakdown is on the next
+ * screen, where it belongs: it answers "how is this made up", a question
+ * nobody has before they have decided the price is acceptable at all. Three
+ * rows of tax arithmetic in front of someone still deciding whether to make
+ * an account is arithmetic they did not ask for.
+ *
+ * What does NOT move is the total. ₹10,700 is on this screen, before the
+ * account, because the surprise that loses a booking is discovering the tax
+ * after signing up — and that surprise comes from the TOTAL being hidden,
+ * not from GST and TCS being on one line instead of three.
  */
 function SignedOutPreview({ trip }: { trip: BookableTrip }) {
   const price = computePricing(trip, 1);
   const signInHref = `/login?next=${encodeURIComponent(`/trips/${trip.slug}/book`)}`;
   const signUpHref = `/signup?next=${encodeURIComponent(`/trips/${trip.slug}/book`)}`;
-
-  const lines = [
-    { label: "Trip fare — 1 traveller", value: price.subtotalPaise },
-    { label: `GST @ ${price.gstPercent}%`, value: price.gstPaise },
-    ...(price.tcsPercent > 0
-      ? [{ label: `TCS @ ${price.tcsPercent}% (overseas package)`, value: price.tcsPaise }]
-      : []),
-  ];
 
   return (
     <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_340px]">
@@ -100,15 +99,17 @@ function SignedOutPreview({ trip }: { trip: BookableTrip }) {
           total updates as you go.
         </p>
 
-        <dl className="mt-6 divide-y divide-navy/10 border-y border-navy/10">
-          {lines.map((l) => (
-            <div key={l.label} className="flex items-baseline justify-between gap-4 py-3">
-              <dt className="text-[0.92rem] text-navy/70">{l.label}</dt>
-              <dd className="font-medium tabular-nums text-navy">{formatINR(toRupees(l.value))}</dd>
-            </div>
-          ))}
+        <dl className="mt-6 border-y border-navy/10">
           <div className="flex items-baseline justify-between gap-4 py-4">
-            <dt className="font-medium text-navy">Total per traveller</dt>
+            <div>
+              <dt className="font-medium text-navy">Total per traveller</dt>
+              {/* The components named, not priced. Someone who wants the
+                  split gets it on the next screen; someone who doesn't
+                  still learns there is nothing else to come. */}
+              <p className="mt-0.5 text-[0.85rem] text-navy/55">
+                Trip fare + GST{price.tcsPercent > 0 ? " + TCS" : ""}
+              </p>
+            </div>
             <dd className="font-display text-2xl tabular-nums text-navy">
               {formatINR(toRupees(price.totalPaise))}
             </dd>
