@@ -48,6 +48,15 @@ const METHOD_LABEL: Record<string, string> = {
   CREDIT: "Travel credit",
 };
 
+/**
+ * Whether the admin can raise a Razorpay refund from this page.
+ *
+ * Off for now: refunds are arranged by hand and recorded in the offline
+ * panel. Set to true to bring the gateway panel back — nothing else needs
+ * changing.
+ */
+const SHOW_RAZORPAY_REFUNDS = false;
+
 export default async function AdminBookingPage({
   params,
 }: {
@@ -471,48 +480,56 @@ export default async function AdminBookingPage({
             creditPaise={creditAvailablePaise}
           />
 
-          {/* Only PROCESSED refunds have actually left the account; PENDING
-              ones are with Razorpay. Both are held back from the refundable
-              ceiling so a second refund can't be raised against money that is
-              already on its way out. */}
-          <RefundPanel
-            reference={booking.reference}
-            owedPaise={overpaidPaise}
-            // Razorpay-scoped, because this box only arranges Razorpay money.
-            gatewayRefundedPaise={committedGatewayRefundPaise(booking.refunds)}
-            otherRefundedPaise={
-              committedRefundPaise(booking.refunds) -
-              committedGatewayRefundPaise(booking.refunds)
-            }
-            heldPaise={refundableHeldPaise}
-            pendingPaise={pendingRefundsPaise}
-            gatewayPaidPaise={gatewayPaidPaise}
-            creditPaidPaise={creditPaidPaise}
-            refundablePaise={
-              /**
-               * Two independent limits, and the smaller wins.
-               *
-               * Razorpay can only send back what IT received, less what has
-               * already gone back through IT — offline refunds don't touch
-               * that, because handing over cash takes nothing out of the
-               * gateway. Subtracting them here reported ₹0 refundable on a
-               * booking where Razorpay still held ₹90.
-               *
-               * And the whole booking cannot return more than it holds, which
-               * is where offline refunds and carried-forward credit do count.
-               */
-              Math.max(
-                Math.min(
-                  gatewayPaidPaise - committedGatewayRefundPaise(booking.refunds),
-                  refundableHeldPaise,
-                ),
-                0,
-              )
-            }
-            hasOnlinePayment={booking.payments.some(
-              (p) => p.method === "RAZORPAY" && p.status === "CAPTURED" && p.razorpayPaymentId,
-            )}
-          />
+          {/* ── Razorpay refunds: switched off ──
+              Off the page, not out of the codebase. RefundPanel and
+              requestRefund are untouched; flipping the flag at the top of
+              this file brings it straight back, and because the JSX below is
+              still compiled it cannot quietly rot while it is off.
+
+              Refunds are arranged by hand in the panel underneath meanwhile,
+              and recorded against the booking the same way. */}
+          {SHOW_RAZORPAY_REFUNDS && (
+            <RefundPanel
+              reference={booking.reference}
+              owedPaise={overpaidPaise}
+              // Razorpay-scoped, because this box only arranges Razorpay money.
+              gatewayRefundedPaise={committedGatewayRefundPaise(booking.refunds)}
+              otherRefundedPaise={
+                committedRefundPaise(booking.refunds) -
+                committedGatewayRefundPaise(booking.refunds)
+              }
+              heldPaise={refundableHeldPaise}
+              pendingPaise={pendingRefundsPaise}
+              gatewayPaidPaise={gatewayPaidPaise}
+              creditPaidPaise={creditPaidPaise}
+              refundablePaise={
+                /**
+                 * Two independent limits, and the smaller wins.
+                 *
+                 * Razorpay can only send back what IT received, less what has
+                 * already gone back through IT — offline refunds don't touch
+                 * that, because handing over cash takes nothing out of the
+                 * gateway. Subtracting them here reported ₹0 refundable on a
+                 * booking where Razorpay still held ₹90.
+                 *
+                 * And the whole booking cannot return more than it holds,
+                 * which is where offline refunds and carried-forward credit
+                 * do count.
+                 */
+                Math.max(
+                  Math.min(
+                    gatewayPaidPaise - committedGatewayRefundPaise(booking.refunds),
+                    refundableHeldPaise,
+                  ),
+                  0,
+                )
+              }
+              hasOnlinePayment={booking.payments.some(
+                (p) => p.method === "RAZORPAY" && p.status === "CAPTURED" && p.razorpayPaymentId,
+              )}
+            />
+          )}
+
           <OfflineRefundPanel
             reference={booking.reference}
             heldPaise={refundableHeldPaise}

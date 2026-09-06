@@ -50,7 +50,23 @@ export const metadata: Metadata = {
     images: ["https://images.unsplash.com/photo-1582510003544-4d00b7f74220?w=1200&q=80"],
   },
   robots: { index: true, follow: true },
-  icons: { icon: "/favicon.ico" },
+  /**
+   * Declared in full, because declaring it at all overrides the app/ file
+   * conventions — with only `icon: "/favicon.ico"` here, an app/icon.png and
+   * app/apple-icon.png sat on disk emitting no link tags at all.
+   *
+   * The .ico carries 16/32/48 for browser tabs; the PNG is for anything that
+   * wants a big one (bookmarks, Android, link unfurls); apple-icon is the
+   * iOS home-screen tile, which must be opaque — hence the navy ground
+   * rather than a transparent mark.
+   */
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "48x48", type: "image/x-icon" },
+      { url: "/icon.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: { url: "/apple-icon.png", sizes: "180x180", type: "image/png" },
+  },
 };
 
 export const viewport: Viewport = {
