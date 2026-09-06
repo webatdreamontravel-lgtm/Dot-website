@@ -1,21 +1,3 @@
-#
-# Production CI/CD — every push to `production` builds, archives to S3, and
-# releases onto the EC2 box, reloading the PM2 process that already runs there.
-#
-#   build   npm ci -> prisma migrate deploy -> next build -> standalone tarball
-#           -> s3://dot-prod-builds/releases/<timestamp>-<sha>.tar.gz
-#   deploy  presign the tarball -> SSH in -> unpack beside the app dir ->
-#           swap it into place -> pm2 reload -> health check
-#           -> swap the previous directory back if it fails
-#
-# The deploy keeps YOUR existing PM2 setup: it reloads the app by name and
-# never touches your ecosystem file, which is carried across the swap. The
-# bundle's `npm start` is rewritten to `node server.js` so the process command
-# your PM2 config already uses keeps working against a standalone build.
-#
-# Everything environment-specific comes from repository secrets and variables;
-# see docs/DEPLOYMENT.md.
-#
 name: Deploy production
 
 on:
@@ -28,8 +10,6 @@ on:
         type: boolean
         default: false
 
-# Serialise deploys. cancel-in-progress stays FALSE on purpose: killing a run
-# mid-`ssh` would leave the box between the directory swap and the reload.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -53,8 +33,6 @@ jobs:
 
       - name: Derive release id
         id: release
-        # Timestamp-first so lexical sort and chronological sort agree, plus
-        # the short sha so a release names its own commit.
         run: |
           echo "release_id=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
@@ -65,8 +43,6 @@ jobs:
           cache: npm
 
       - name: Write .env from secret
-        # Quoted heredoc delimiter: Actions substitutes the secret before the
-        # shell sees it, so nothing inside it can be expanded or executed.
         env:
           RELEASE_ID: ${{ steps.release.outputs.release_id }}
         run: |
@@ -75,28 +51,14 @@ jobs:
           ${{ secrets.PRODUCTION_ENV }}
           DOT_ENV_EOF
 
-          # A secret pasted from Windows or from some editors carries CRLF.
-          # grep still matches, but the \r ends up INSIDE the value, so the
-          # database URL gets a stray carriage return and the connection fails
-          # with something that looks nothing like the real cause.
           sed -i 's/\r$//' .env
 
-          # NEXT_PUBLIC_* is inlined by the bundler, so this is welded to the
-          # artifact and reported by /api/health.
           echo "NEXT_PUBLIC_RELEASE_SHA=$RELEASE_ID" >> .env
 
-          # Diagnostics before the check, because "no DATABASE_URL" on its own
-          # gives you nowhere to go. Key NAMES are printed, never values —
-          # everything to the right of the first `=` stays out of the log.
           echo "· .env lines            : $(wc -l < .env | tr -d ' ')"
           echo "· keys found            : $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '=' | tr '\n' ' ')"
 
           if ! grep -q '^DATABASE_URL=' .env; then
-            # Distinguish the three ways this actually happens, because the fix
-            # is different for each.
-            # Indent check FIRST: indented lines don't match ^[A-Za-z_] either,
-            # so the empty test below would otherwise swallow this case and
-            # send you looking for a secret that is actually there.
             if grep -qE '^[[:space:]]+DATABASE_URL=' .env; then
               echo "::error::PRODUCTION_ENV has DATABASE_URL but its lines are INDENTED. Re-paste the secret with every line starting at column 0."
             elif [ ! -s .env ] || [ "$(grep -c '^[A-Za-z_]' .env)" -le 1 ]; then
@@ -113,25 +75,16 @@ jobs:
           echo "Loaded $(grep -c '^[A-Za-z_]' .env) variables."
 
       - name: Install dependencies
-        # `postinstall` runs `prisma generate`, which reads .env — hence the
-        # ordering. `npm ci` so the lockfile is authoritative.
         run: npm ci
 
       - name: Apply database migrations
         if: ${{ inputs.skip_migrations != true }}
-        # Uses DIRECT_URL (port 5432) via prisma.config.ts — migrations cannot
-        # run through the transaction pooler. Kept a separate step from the
-        # build so a migration failure is obvious rather than buried.
         run: npx prisma migrate deploy
 
       - name: Build
         run: npx next build
 
       - name: Assemble release bundle
-        # `output: "standalone"` emits the server plus only the node_modules it
-        # actually imports (~17 MB instead of ~600 MB), but deliberately NOT
-        # .next/static or public/ — Next assumes a CDN serves those. We serve
-        # them from the same box, so copy them in.
         run: |
           set -euo pipefail
           test -d .next/standalone || { echo "::error::.next/standalone missing — is output:'standalone' set in next.config.ts?"; exit 1; }
@@ -142,11 +95,6 @@ jobs:
           cp -r .next/static bundle/.next/static
           [ -d public ] && cp -r public bundle/public
 
-          # Next copies package.json verbatim, so `start` still says
-          # `next start` — which cannot run from a traced bundle (no Next CLI
-          # dependency tree, no devDependencies). Point it at the standalone
-          # server instead, so whatever your PM2 config runs — `npm start`,
-          # `npm run start` — keeps working unchanged.
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('bundle/package.json', 'utf8'));
@@ -155,7 +103,6 @@ jobs:
             fs.writeFileSync('bundle/package.json', JSON.stringify(pkg, null, 2));
           "
 
-          # The .env is delivered over SSH — it must never sit in an S3 object.
           rm -f bundle/.env bundle/.env.local
 
           tar -czf release.tar.gz -C bundle .
@@ -171,7 +118,6 @@ jobs:
       - name: Upload release to S3
         id: upload
         env:
-          # Set the S3_BUCKET repository variable to override.
           S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
           RELEASE_ID: ${{ steps.release.outputs.release_id }}
         run: |
@@ -183,8 +129,6 @@ jobs:
             --no-progress \
             --metadata "commit=${GITHUB_SHA},run=${GITHUB_RUN_ID},ref=${GITHUB_REF_NAME}"
 
-          # Pointer object, so you can find and fetch the newest build by hand
-          # without listing and sorting the whole prefix.
           echo "$KEY" > latest.txt
           aws s3 cp latest.txt "s3://${S3_BUCKET}/releases/latest.txt" --no-progress
 
@@ -197,8 +141,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Attach a GitHub Environment to require approval before this job runs.
-    # Harmless if the environment does not exist.
     environment:
       name: production
       url: ${{ vars.SITE_URL }}
@@ -213,17 +155,13 @@ jobs:
 
       - name: Presign the release URL
         id: presign
-        # The EC2 box needs no AWS credentials or instance role this way — it
-        # just curls a URL that stops working in an hour.
         env:
-          # Set the S3_BUCKET repository variable to override.
           S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
           S3_KEY: ${{ needs.build.outputs.s3_key }}
         run: |
           set -euo pipefail
           [ -n "$S3_BUCKET" ] || { echo "::error::S3_BUCKET is empty"; exit 1; }
           URL="$(aws s3 presign "s3://${S3_BUCKET}/${S3_KEY}" --expires-in 3600)"
-          # It is a bearer credential for the artifact until it expires.
           echo "::add-mask::$URL"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
@@ -237,21 +175,23 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
 
-          # printf adds the trailing newline OpenSSH requires after the END
-          # line; tr strips CR, because a key pasted through a Windows editor
-          # or some browsers carries CRLF and every line then fails to parse
-          # with a bare "error in libcrypto".
-          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KEY" \
+            | tr -d '\r' \
+            | sed -e '/./,$!d' -e 's/[[:space:]]*$//' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          # -P '' so a passphrase-protected key fails immediately instead of
-          # blocking on a prompt that no one can answer on a runner.
           if ! ssh-keygen -y -P '' -f ~/.ssh/deploy_key >/dev/null 2>&1; then
-            first="$(head -1 ~/.ssh/deploy_key)"
-            last="$(tail -1 ~/.ssh/deploy_key)"
+            first="$(grep -m1 . ~/.ssh/deploy_key || true)"
+            last="$(grep . ~/.ssh/deploy_key | tail -1 || true)"
+            lines="$(grep -c . ~/.ssh/deploy_key || echo 0)"
             echo "· first line: ${first:0:40}"
             echo "· last line : ${last:0:40}"
-            echo "· lines     : $(wc -l < ~/.ssh/deploy_key | tr -d ' ')"
+            echo "· lines     : $lines"
+
+            if [ "$lines" -le 2 ] && printf '%s' "$first" | grep -q "BEGIN.*PRIVATE KEY"; then
+              echo "::error::The key is on a single line — its line breaks were lost when pasting. Re-copy it with 'cat key.pem' and paste so BEGIN, the body, and END are on separate lines."
+              exit 1
+            fi
 
             case "$first" in
               *"PuTTY-User-Key-File"*)
@@ -275,7 +215,6 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
-          # Reused by every step below.
           cat > ~/.ssh/config <<SSH_CONFIG_EOF
           Host target
             HostName $SSH_HOST
@@ -292,12 +231,6 @@ jobs:
         env:
           ENV_PATH: ${{ vars.EC2_ENV_PATH || '~/.dot-production.env' }}
           RELEASE_ID: ${{ needs.build.outputs.release_id }}
-        # Delivered over SSH, never through S3 — the service-role key and DB
-        # password have no business in an object store.
-        #
-        # It lands OUTSIDE the app directory, because the deploy replaces that
-        # directory wholesale. The deploy step copies it in as .env, which is
-        # where Next reads it from at runtime.
         run: |
           set -euo pipefail
           umask 077
@@ -305,8 +238,6 @@ jobs:
           cat > production.env <<'DOT_ENV_EOF'
           ${{ secrets.PRODUCTION_ENV }}
           DOT_ENV_EOF
-          # Informational only on the box — /api/health reports the value the
-          # BUILD job baked in, since NEXT_PUBLIC_* is inlined by the bundler.
           echo "NEXT_PUBLIC_RELEASE_SHA=$RELEASE_ID" >> production.env
 
           scp production.env "target:$ENV_PATH"
@@ -322,9 +253,6 @@ jobs:
           ENV_PATH: ${{ vars.EC2_ENV_PATH || '~/.dot-production.env' }}
           RELEASE_URL: ${{ steps.presign.outputs.url }}
           RELEASE_ID: ${{ needs.build.outputs.release_id }}
-        # The remote script is a quoted heredoc on stdin, so nothing in it is
-        # expanded locally; its inputs arrive as environment variables on the
-        # remote command line.
         run: |
           set -euo pipefail
           ssh target \
@@ -334,8 +262,6 @@ jobs:
           log()  { printf '\n==> %s\n' "$*"; }
           fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-          # `ssh host bash -s` is non-interactive and non-login, so nvm's lines
-          # in ~/.bashrc are usually skipped and pm2 is not on PATH.
           if ! command -v pm2 >/dev/null 2>&1; then
             [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
             export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.npm-global/bin"
@@ -349,8 +275,6 @@ jobs:
           STAGE="${APP_DIR}.incoming"
           BACKUP="${APP_DIR}.previous"
 
-          # ── Fetch and unpack beside the app dir ──────────────────────────
-          # Staged first so a corrupt download never touches the live app.
           log "Downloading release $RELEASE_ID"
           TARBALL="$(mktemp /tmp/dot-release-XXXXXX.tar.gz)"
           trap 'rm -f "$TARBALL"' EXIT
@@ -365,34 +289,21 @@ jobs:
           tar -xzf "$TARBALL" -C "$STAGE" || fail "Tarball is corrupt."
           [ -f "$STAGE/server.js" ] || fail "Bundle has no server.js — the build did not produce a standalone output."
 
-          # Next reads .env from the process working directory at boot.
           cp "$ENV_PATH" "$STAGE/.env"
           chmod 600 "$STAGE/.env"
 
-          # Carry across anything of yours that lives in the app dir and is not
-          # part of the build — above all the PM2 ecosystem file, which the
-          # directory swap would otherwise delete.
           for keep in ecosystem.config.js ecosystem.config.cjs ecosystem.json .env.local; do
             [ -e "$APP_DIR/$keep" ] && cp -a "$APP_DIR/$keep" "$STAGE/$keep" && echo "    carried over: $keep"
           done
 
-          # ── Swap ─────────────────────────────────────────────────────────
-          # Two renames on the same filesystem. $APP_DIR is absent for roughly
-          # a microsecond, and PM2 only resolves it when it spawns the new
-          # worker, which happens after.
           log "Activating $RELEASE_ID"
           rm -rf "$BACKUP"
           [ -d "$APP_DIR" ] && mv "$APP_DIR" "$BACKUP"
           mv "$STAGE" "$APP_DIR"
 
-          # ── Reload ───────────────────────────────────────────────────────
-          # By name, against the process you already have registered. No
-          # --update-env: the env belongs to your ecosystem config, and Next
-          # re-reads .env from the new directory on boot anyway.
           log "Reloading PM2 process '$PM2_APP_NAME'"
           pm2 reload "$PM2_APP_NAME" || fail "PM2 reload failed. Check: pm2 logs $PM2_APP_NAME --lines 100"
 
-          # ── Health check ─────────────────────────────────────────────────
           log "Waiting for http://127.0.0.1:$APP_PORT/api/health (up to 90s)"
           healthy=0
           deadline=$(( $(date +%s) + 90 ))
@@ -419,10 +330,8 @@ jobs:
 
           log "Healthy. $RELEASE_ID is live."
 
-          # Persist the process list so PM2's boot script restores it.
           pm2 save --force >/dev/null 2>&1 || true
 
-          # Keep exactly one previous directory: it is the rollback target.
           log "Deploy complete: $RELEASE_ID"
           REMOTE_SCRIPT
 
@@ -431,8 +340,6 @@ jobs:
         env:
           SITE_URL: ${{ vars.SITE_URL }}
           RELEASE_ID: ${{ needs.build.outputs.release_id }}
-        # The remote script already proved the app is healthy on localhost.
-        # This proves the proxy/DNS path in front of it serves the new release.
         run: |
           set -euo pipefail
           body="$(curl -fsS --max-time 20 "${SITE_URL%/}/api/health")" || {
