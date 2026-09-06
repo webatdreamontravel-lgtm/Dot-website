@@ -31,7 +31,12 @@ export const metadata: Metadata = {
     "Browse all upcoming Dream On Travel community trips — DOT Signatures, Western Ghats escapes, coastal carnivals, abroad voyages and more.",
 };
 
-export const revalidate = 60;
+/**
+ * Dead config removed, not moved: this page reads `searchParams` for the
+ * filters, which opts it into dynamic rendering regardless. The cards print a
+ * live seat count too, so caching it would reintroduce the same disagreement
+ * the trip page just had.
+ */
 
 type Query = { category?: string; q?: string; from?: string; to?: string };
 

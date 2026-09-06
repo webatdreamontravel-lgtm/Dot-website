@@ -273,6 +273,11 @@ export default async function AdminBookingPage({
             customerNotes={booking.customerNotes}
             internalNotes={booking.internalNotes}
             travellers={booking.travellers}
+            // Seat one is the account holder. Bookings taken before
+            // gender was stamped onto the traveller row have it only on
+            // the profile, so it is passed through as the fallback
+            // rather than backfilled into history.
+            accountGender={booking.profile.gender}
             // Removing a seat from an already-cancelled booking would give
             // the trip seats it never lost.
             canRemoveSeat={seatsCounted}

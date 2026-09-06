@@ -8,6 +8,7 @@ import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { amountOutstanding } from "@/lib/booking/balance";
+import { TRAVELLER_GENDERS } from "@/lib/booking/travellers";
 import { seatsCounted } from "@/lib/booking/seats";
 import {
   checkoutInFlight,
@@ -525,6 +526,10 @@ const detailsSchema = z.object({
       z.object({
         id: z.string().uuid(),
         fullName: z.string().trim().min(2, "Name is required").max(120),
+        // Customers answer this at checkout for every seat but the first, so
+        // the admin needs to be able to correct it — a field the team can see
+        // and not fix is worse than one they can't see.
+        gender: z.enum(TRAVELLER_GENDERS).nullable().optional(),
         // Optional here — the admin edits an existing traveller and may be
         // fixing only a name — but anything present is normalised, so an
         // edit can't reintroduce a "+91…" variant of a number we already hold.
@@ -582,6 +587,7 @@ export async function updateBookingDetails(
             fullName: t.fullName,
             phone: t.phone || null,
             email: t.email || null,
+            gender: t.gender ?? null,
             // Written to the lead and cleared from everyone else. Otherwise
             // an edit leaves a second copy behind on a traveller the form no
             // longer shows it against, and the panel reads whichever it

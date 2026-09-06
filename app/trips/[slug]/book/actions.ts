@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { getSessionProfile } from "@/lib/auth";
-import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { computePricing, MAX_SEATS_PER_PUBLIC_BOOKING } from "@/lib/booking/pricing";
+import { genderRequiredForSeat, TRAVELLER_GENDERS } from "@/lib/booking/travellers";
 import { nextBookingReference } from "@/lib/booking/reference";
 import { prisma } from "@/lib/prisma";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
@@ -33,16 +34,36 @@ const travellerSchema = z.object({
     // as three different strings.
     .transform(toNationalDigits),
   email: z.string().trim().min(1, "Email is required").email("Enter a valid email address").max(160),
+  /**
+   * Optional in the shape, required by position.
+   *
+   * Only the seats beyond the first have to answer, and a per-field rule
+   * can't see its own index — so the requirement is enforced in the
+   * superRefine below, where the array is.
+   */
+  gender: z.enum(TRAVELLER_GENDERS).optional(),
 });
 
-const bookingSchema = z.object({
-  slug: z.string().trim().min(1),
-  seats: z.coerce.number().int().min(1).max(MAX_SEATS_PER_BOOKING),
-  travellers: z.array(travellerSchema).min(1).max(MAX_SEATS_PER_BOOKING),
-  emergencyContactName: z.string().trim().max(120).optional().or(z.literal("")),
-  emergencyContactPhone: z.string().trim().max(20).optional().or(z.literal("")),
-  notes: z.string().trim().max(1000).optional().or(z.literal("")),
-});
+const bookingSchema = z
+  .object({
+    slug: z.string().trim().min(1),
+    seats: z.coerce.number().int().min(1).max(MAX_SEATS_PER_PUBLIC_BOOKING),
+    travellers: z.array(travellerSchema).min(1).max(MAX_SEATS_PER_PUBLIC_BOOKING),
+    emergencyContactName: z.string().trim().max(120).optional().or(z.literal("")),
+    emergencyContactPhone: z.string().trim().max(20).optional().or(z.literal("")),
+    notes: z.string().trim().max(1000).optional().or(z.literal("")),
+  })
+  .superRefine((data, ctx) => {
+    data.travellers.forEach((t, i) => {
+      if (genderRequiredForSeat(i) && !t.gender) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["travellers", i, "gender"],
+          message: "Tell us this traveller's gender",
+        });
+      }
+    });
+  });
 
 /**
  * Works out which seat function refused us, and why.
@@ -158,6 +179,11 @@ export async function createBookingRequest(
               fullName: t.fullName,
               phone: t.phone,
               email: t.email,
+              // Seat one is the account holder, who answered this at signup —
+              // so it is copied rather than asked again. Snapshotted onto the
+              // booking like every other fact about who travelled, not read
+              // back through the profile, which they can change later.
+              gender: (i === 0 ? profile.gender : t.gender) ?? null,
               // Emergency contact is asked once and kept against the lead
               // traveller — it's one contact for the party, not per person.
               emergencyContactName: i === 0 ? data.emergencyContactName || null : null,

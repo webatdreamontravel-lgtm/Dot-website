@@ -11,6 +11,7 @@ import { AlertCircle, Check, IndianRupee, Loader2, Pencil, Trash2, X } from "luc
 // bundle, which fails the build.
 import { toRupees } from "@/lib/booking/pricing";
 import { statusOpen } from "@/lib/booking/lifecycle";
+import { GENDER_LABEL, isTravellerGender, TRAVELLER_GENDERS } from "@/lib/booking/travellers";
 import { sanitiseAmountInput } from "@/lib/money";
 import { formatINR } from "@/lib/utils";
 import { BOOKING_TONE, Chip, Panel } from "../../ui";
@@ -31,6 +32,13 @@ type Traveller = {
   fullName: string;
   phone: string | null;
   email: string | null;
+  /**
+   * Asked at checkout for every seat but the first, for room sharing. Shown
+   * here because rooming is decided on this screen, and editable because a
+   * customer picking the wrong one on their phone shouldn't be permanent.
+   * Null on the lead, and on every booking taken before it was asked.
+   */
+  gender: string | null;
   cancelledAt: Date | string | null;
   /**
    * Collected at checkout, stored on the lead traveller, and until now shown
@@ -740,6 +748,7 @@ export function DetailsPanel({
   customerNotes,
   internalNotes,
   travellers,
+  accountGender,
   canRemoveSeat,
 }: {
   bookingId: string;
@@ -749,6 +758,8 @@ export function DetailsPanel({
   /** The team's own, plus warnings the system stamps on a booking. */
   internalNotes: string | null;
   travellers: Traveller[];
+  /** The booker's own answer from signup. Fallback for seat one only. */
+  accountGender: string | null;
   canRemoveSeat: boolean;
 }) {
   const { run, pending, error } = useAction();
@@ -816,6 +827,10 @@ export function DetailsPanel({
             fullName: t.fullName,
             phone: t.phone ?? "",
             email: t.email ?? "",
+            // Narrowed rather than cast: the column is a plain string, so a
+            // value the app never writes could be sitting in it, and sending
+            // that back would fail the action's enum for the whole booking.
+            gender: isTravellerGender(t.gender) ? t.gender : null,
           })),
         }),
       () => setEditing(false),
@@ -925,10 +940,44 @@ export function DetailsPanel({
                     className={controlClass}
                   />
                   <Input value={t.email ?? ""} onChange={(v) => patch(t.id, { email: v })} placeholder="Email" />
+                  <select
+                    value={isTravellerGender(t.gender) ? t.gender : ""}
+                    onChange={(e) => patch(t.id, { gender: e.target.value || null })}
+                    aria-label="Gender"
+                    className={controlClass}
+                  >
+                    {/* Blank is a real state, not a prompt: the lead traveller
+                        is never asked, and no booking taken before this was
+                        added has an answer. */}
+                    <option value="">Gender — not given</option>
+                    {TRAVELLER_GENDERS.map((g) => (
+                      <option key={g} value={g}>
+                        {GENDER_LABEL[g]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               ) : (
                 <>
-                  <p className="text-[0.9rem] font-semibold text-navy">{t.fullName}</p>
+                  <p className="flex flex-wrap items-center gap-2 text-[0.9rem] font-semibold text-navy">
+                    {t.fullName}
+                    {(() => {
+                      // Seat one is the account holder, so their signup answer
+                      // stands in when the row itself has none — every booking
+                      // taken before this was stamped on. Never for the others:
+                      // the account belongs to one of the party, not all of it.
+                      const g = isTravellerGender(t.gender)
+                        ? t.gender
+                        : i === 0 && isTravellerGender(accountGender)
+                          ? accountGender
+                          : null;
+                      return g ? (
+                        <span className="rounded-full bg-[#eef1f6] px-2 py-0.5 text-[0.7rem] font-medium uppercase tracking-[0.06em] text-[#5a6785]">
+                          {GENDER_LABEL[g]}
+                        </span>
+                      ) : null;
+                    })()}
+                  </p>
                   <p className="text-[0.8rem] text-[#8b96ad]">
                     {[t.phone, t.email].filter(Boolean).join(" · ") || "no contact"}
                   </p>

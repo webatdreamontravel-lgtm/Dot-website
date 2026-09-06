@@ -31,6 +31,17 @@ export type PriceBreakdown = {
   balancePaise: number;
 };
 
+/**
+ * What one customer can book for themselves in a single go.
+ *
+ * Two. A larger party is a conversation — rooming, transport and who is
+ * actually travelling — and the team would rather have it on WhatsApp than
+ * discover it in a booking. The admin cap below is deliberately higher so
+ * that conversation can still be turned into a booking afterwards.
+ */
+export const MAX_SEATS_PER_PUBLIC_BOOKING = 2;
+
+/** What an admin can enter on someone's behalf. The escape hatch. */
 export const MAX_SEATS_PER_BOOKING = 10;
 
 /**

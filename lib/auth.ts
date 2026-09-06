@@ -10,6 +10,8 @@ export type SessionProfile = {
   email: string;
   fullName: string | null;
   phone: string | null;
+  /** Asked at signup, for rooming. Copied onto the lead traveller at booking. */
+  gender: "MALE" | "FEMALE" | null;
   role: "CUSTOMER" | "ADMIN";
 };
 
@@ -20,7 +22,7 @@ export async function getSessionProfile(): Promise<SessionProfile | null> {
 
   const profile = await prisma.profile.findUnique({
     where: { id: user.id },
-    select: { id: true, email: true, fullName: true, phone: true, role: true },
+    select: { id: true, email: true, fullName: true, phone: true, gender: true, role: true },
   });
 
   return profile ?? null;

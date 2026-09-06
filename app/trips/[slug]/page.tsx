@@ -9,7 +9,22 @@ import { getPublishedTripSlugs, getTripBySlug } from "@/lib/queries/trips";
 
 type Params = { params: Promise<{ slug: string }> };
 
-export const revalidate = 60;
+/**
+ * Rendered per request, deliberately not cached.
+ *
+ * This page prints a live seat count — "Slots left 1 / 6" in the hero, "Only
+ * 1 of 6 seats left" in the body — and it is the page people book from. With
+ * `revalidate = 60` that number came out of the cache, so the trip could
+ * advertise one seat while /book, which is dynamic and reads the seat
+ * function per request, correctly offered two. The two screens disagreeing
+ * about the last seat is worse than the query it saves: a trip row and one
+ * call to trip_seats_available(), both indexed.
+ *
+ * If this page ever needs caching back, the seat count has to come out of the
+ * cached tree first — a Suspense boundary around the live number — not by
+ * putting the whole page back on a timer.
+ */
+export const dynamic = "force-dynamic";
 
 export async function generateStaticParams() {
   return (await getPublishedTripSlugs()).map((slug) => ({ slug }));

@@ -1,23 +1,29 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useState, useTransition } from "react";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, Loader2, Minus, Plus } from "lucide-react";
 
 import type { BookableTrip } from "@/lib/queries/booking";
 import { paymentsConfig } from "@/lib/data/siteConfig";
 import {
   computePricing,
-  MAX_SEATS_PER_BOOKING,
+  MAX_SEATS_PER_PUBLIC_BOOKING,
   toRupees,
 } from "@/lib/booking/pricing";
+import {
+  GENDER_LABEL,
+  genderRequiredForSeat,
+  TRAVELLER_GENDERS,
+  type TravellerGender,
+} from "@/lib/booking/travellers";
 import { cn, formatDateRange, formatINR } from "@/lib/utils";
 import { PHONE_COUNTRY_CODE, sanitisePhoneInput } from "@/lib/phone";
 import { createBookingRequest } from "./actions";
 import { startPayment } from "./payActions";
 import { useRazorpayCheckout } from "@/components/booking/RazorpayCheckout";
 
-type Traveller = { fullName: string; phone: string; email: string };
+type Traveller = { fullName: string; phone: string; email: string; gender?: TravellerGender };
 
 type Customer = { fullName: string | null; email: string; phone: string | null };
 
@@ -38,7 +44,7 @@ export function BookingForm({
   // it: same form, same validation, two different last steps.
   const payOnline = trip.razorpayEnabled;
 
-  const maxSeats = Math.min(trip.seatsAvailable, MAX_SEATS_PER_BOOKING);
+  const maxSeats = Math.min(trip.seatsAvailable, MAX_SEATS_PER_PUBLIC_BOOKING);
 
   const [step, setStep] = useState<1 | 2>(1);
   const [seats, setSeats] = useState(1);
@@ -86,7 +92,12 @@ export function BookingForm({
   // three travellers on screen the bad field is often below the fold.
   useEffect(() => {
     if (Object.keys(fieldErrors).length === 0) return;
-    const first = document.querySelector<HTMLElement>('input[aria-invalid="true"]');
+    // The gender radios can't carry aria-invalid — it isn't a supported
+    // attribute on that role — so the fieldset flags itself instead, and both
+    // kinds of bad field are found by one query.
+    const first = document.querySelector<HTMLElement>(
+      'input[aria-invalid="true"], [data-invalid="true"]',
+    );
     first?.scrollIntoView({ block: "center", behavior: "smooth" });
     first?.focus({ preventScroll: true });
   }, [fieldErrors]);
@@ -122,6 +133,8 @@ export function BookingForm({
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t.email.trim())) {
         errs[`${i}.email`] = "Enter a valid email address";
       }
+
+      if (genderRequiredForSeat(i) && !t.gender) errs[`${i}.gender`] = "Pick one";
     });
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) return;
@@ -142,6 +155,7 @@ export function BookingForm({
           fullName: t.fullName.trim(),
           phone: t.phone.trim(),
           email: t.email.trim(),
+          gender: t.gender,
         })),
         emergencyContactName: emergencyName.trim(),
         emergencyContactPhone: emergencyPhone.trim(),
@@ -184,6 +198,7 @@ export function BookingForm({
           fullName: t.fullName.trim(),
           phone: t.phone.trim(),
           email: t.email.trim(),
+          gender: t.gender,
         })),
         emergencyContactName: emergencyName.trim(),
         emergencyContactPhone: emergencyPhone.trim(),
@@ -295,7 +310,12 @@ export function BookingForm({
               <div>
                 <p className="text-sm font-medium text-navy">Seats</p>
                 <p className="text-[0.8rem] text-navy/50">
-                  {trip.seatsAvailable} left in this batch
+                  {/* The cap needs saying at the moment the + button stops
+                      working, or a disabled button with no explanation reads
+                      as the page being broken. */}
+                  {seats >= MAX_SEATS_PER_PUBLIC_BOOKING
+                    ? "Two seats is the most you can book here — message us for a bigger group"
+                    : `${trip.seatsAvailable} left in this batch`}
                 </p>
               </div>
               <div className="ml-auto flex items-center gap-1">
@@ -346,6 +366,14 @@ export function BookingForm({
                       type="email"
                       placeholder="name@example.com"
                     />
+                    {genderRequiredForSeat(i) && (
+                      <GenderField
+                        value={t.gender}
+                        onChange={(g) => patchTraveller(i, { gender: g })}
+                        error={fieldErrors[`${i}.gender`]}
+                        className="sm:col-span-2"
+                      />
+                    )}
                   </div>
                 </div>
               ))}
@@ -425,7 +453,14 @@ export function BookingForm({
                   <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-navy/40">
                     Traveller {i + 1}
                   </dt>
-                  <dd className="mt-0.5 font-medium text-navy">{t.fullName}</dd>
+                  <dd className="mt-0.5 font-medium text-navy">
+                    {t.fullName}
+                    {t.gender && (
+                      <span className="ml-2 font-normal text-[0.83rem] text-navy/55">
+                        {GENDER_LABEL[t.gender]}
+                      </span>
+                    )}
+                  </dd>
                   <dd className="text-[0.83rem] text-navy/55">
                     {t.phone} · {t.email}
                   </dd>
@@ -668,6 +703,78 @@ function SeatButton({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Two options, so two buttons rather than a select.
+ *
+ * A dropdown for a binary choice costs a tap to open, a tap to choose and a
+ * scroll on a phone; side-by-side buttons cost one tap and show both answers
+ * without being opened. Radios underneath, so it is one tab stop and the
+ * arrow keys move between them the way a keyboard user expects.
+ */
+function GenderField({
+  value,
+  onChange,
+  error,
+  className,
+}: {
+  value?: TravellerGender;
+  onChange: (v: TravellerGender) => void;
+  error?: string;
+  className?: string;
+}) {
+  // One name per rendered field, so two travellers' radios never end up in
+  // the same native group and cancel each other out.
+  const group = useId();
+  const errorId = `${group}-error`;
+
+  return (
+    <fieldset
+      className={cn("block", className)}
+      data-invalid={error ? "true" : undefined}
+      aria-describedby={error ? errorId : undefined}
+    >
+      <legend className="mb-1.5 block text-[0.8rem] font-medium text-navy/70">
+        Gender<span className="ml-0.5 text-coral">*</span>
+        {/* Said plainly, because a form that asks without saying why reads as
+            nosy rather than practical. */}
+        <span className="ml-1.5 font-normal text-navy/45">— for room sharing</span>
+      </legend>
+      <div className="flex gap-2">
+        {TRAVELLER_GENDERS.map((g) => {
+          const active = value === g;
+          return (
+            <label
+              key={g}
+              className={cn(
+                "flex flex-1 cursor-pointer items-center justify-center rounded-xl border px-4 py-2.5",
+                "text-[0.92rem] transition has-[:focus-visible]:border-teal",
+                active
+                  ? "border-teal bg-teal/10 font-medium text-navy"
+                  : cn("bg-white text-navy/70 hover:border-navy/25", error ? "border-coral" : "border-navy/12"),
+              )}
+            >
+              <input
+                type="radio"
+                name={group}
+                value={g}
+                className="sr-only"
+                checked={active}
+                onChange={() => onChange(g)}
+              />
+              {GENDER_LABEL[g]}
+            </label>
+          );
+        })}
+      </div>
+      {error && (
+        <span id={errorId} className="mt-1 block text-[0.78rem] text-coral">
+          {error}
+        </span>
+      )}
+    </fieldset>
   );
 }
 
