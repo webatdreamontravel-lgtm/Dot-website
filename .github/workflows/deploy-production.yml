@@ -98,7 +98,7 @@ jobs:
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('bundle/package.json', 'utf8'));
-            pkg.scripts = { start: 'node server.js' };
+            pkg.scripts = { start: 'HOSTNAME=\${HOSTNAME_BIND:-0.0.0.0} node server.js' };
             delete pkg.devDependencies;
             fs.writeFileSync('bundle/package.json', JSON.stringify(pkg, null, 2));
           "
@@ -322,6 +322,7 @@ jobs:
           mv "$STAGE" "$APP_DIR"
 
           log "Reloading PM2 process '$PM2_APP_NAME'"
+          RELOADED_AT="$(date '+%Y-%m-%dT%H:%M:%S')"
           pm2 reload "$PM2_APP_NAME" || fail "PM2 reload failed. Check: pm2 logs $PM2_APP_NAME --lines 100"
 
           log "Waiting for http://127.0.0.1:$APP_PORT/api/health (up to 90s)"
@@ -336,7 +337,10 @@ jobs:
 
           if [ "$healthy" -ne 1 ]; then
             printf '\n==> Health check FAILED (last status: %s)\n' "${code:-no response}" >&2
-            pm2 logs "$PM2_APP_NAME" --lines 60 --nostream >&2 || true
+            echo "--- PM2 log tail. This file keeps HISTORY: ignore anything stamped" >&2
+            echo "--- before $RELOADED_AT — those lines are from earlier attempts." >&2
+            pm2 logs "$PM2_APP_NAME" --lines 60 --nostream 2>&1 \
+              | awk -v t="$RELOADED_AT" '{ print } END { print "--- end of tail (entries at or after " t " are from THIS deploy) ---" }' >&2 || true
 
             if [ -d "$BACKUP" ]; then
               log "Rolling back"
