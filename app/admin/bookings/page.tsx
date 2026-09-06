@@ -1,3 +1,4 @@
+import { RotateCcw } from "lucide-react";
 import Link from "next/link";
 
 import { requireAdmin } from "@/lib/auth";
@@ -99,7 +100,24 @@ export default async function AdminBookingsPage({ searchParams }: { searchParams
                               </div>
                             </td>
                             <td className="border-b border-[#eef1f6] px-4 py-3 text-[0.85rem]">{b.trip.title}</td>
-                            <td className="border-b border-[#eef1f6] px-4 py-3"><Chip tone={status.tone}>{status.label}</Chip></td>
+                            <td className="border-b border-[#eef1f6] px-4 py-3">
+                              <Chip tone={status.tone}>{status.label}</Chip>
+                              {/* Money already asked of Razorpay and not yet
+                                  confirmed. It blocks a second refund and a
+                                  carry-forward, and it is otherwise invisible
+                                  until someone opens the booking — so the row
+                                  that lists every booking is where it needs
+                                  to say so. */}
+                              {b.pendingRefundPaise > 0 && (
+                                <span
+                                  title={`${formatINR(rupees(b.pendingRefundPaise))} is on its way back through Razorpay and has not been confirmed yet`}
+                                  className="mt-1 flex items-center gap-1 whitespace-nowrap text-[0.72rem] font-semibold text-[#8b6a00]"
+                                >
+                                  <RotateCcw className="h-3 w-3 flex-none" aria-hidden />
+                                  {formatINR(rupees(b.pendingRefundPaise))} refund pending
+                                </span>
+                              )}
+                            </td>
                             <td className="border-b border-[#eef1f6] px-4 py-3 text-[0.85rem] tabular-nums">{b.seats}</td>
                             <td className="whitespace-nowrap border-b border-[#eef1f6] px-4 py-3 font-display text-[0.95rem] font-semibold tabular-nums">
                               {formatINR(rupees(b.totalPaise))}

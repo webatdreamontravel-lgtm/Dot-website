@@ -1244,7 +1244,8 @@ export function RefundPanel({
           {confirming ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#f0dcae] bg-[#fdf6e3] px-3 py-2.5">
               <span className="text-[0.83rem] text-[#7a4a00]">
-                Send {formatINR(entered)} back? This can&apos;t be undone here.
+                Send {formatINR(entered)}{" "}
+                back? This can&apos;t be undone here.
               </span>
               <button
                 type="button"

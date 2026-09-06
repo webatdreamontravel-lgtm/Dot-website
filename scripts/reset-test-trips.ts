@@ -40,6 +40,7 @@ const TEST_SLUGS = [
   "ooty-balance-lab-test",
   "coonoor-test-bench-test",
   "valparai-full-run-test",
+  "kodaikanal-clean-run-test",
 ] as const;
 
 async function main() {

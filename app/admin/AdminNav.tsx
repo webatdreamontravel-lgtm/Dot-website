@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutGrid, Map, Receipt, Star, Users, Wallet } from "lucide-react";
+import { Landmark, LayoutGrid, Map, Receipt, RotateCcw, Star, Users, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -10,6 +10,13 @@ const LINKS = [
   { href: "/admin", label: "Dashboard", icon: LayoutGrid, exact: true },
   { href: "/admin/trips", label: "Trips", icon: Map },
   { href: "/admin/bookings", label: "Bookings", icon: Receipt },
+  // Next to Bookings, not buried after Reviews: a refund in flight blocks
+  // what the team can do with that booking, so it belongs beside the money.
+  { href: "/admin/refunds", label: "Refunds", icon: RotateCcw },
+  // Beside Refunds for the same reason Refunds sits beside Bookings: this is
+  // the other half of the money picture — what Razorpay actually paid out,
+  // and which bookings each payout covered.
+  { href: "/admin/settlements", label: "Settlements", icon: Landmark },
   { href: "/admin/customers", label: "Customers", icon: Users },
   { href: "/admin/credit", label: "Travel credit", icon: Wallet },
   { href: "/admin/reviews", label: "Reviews", icon: Star },

@@ -512,6 +512,7 @@ function withPaymentState<
     amountPaidPaise: number;
     refundedPaise: number;
     creditIssued?: { amountPaise: number }[];
+    refunds?: { amountPaise: number }[];
   },
 >(b: T) {
   // Money that left this booking for the customer's credit ledger. It belongs
@@ -544,6 +545,8 @@ function withPaymentState<
     // Measured against what was PAID, never against `balance` — see
     // paymentStateOf() for the two ways that got it wrong.
     paymentState: paymentStateOf({ ...b, netHeldPaise: netHeld }),
+    /** Asked of Razorpay, not yet confirmed. Zero on screens that don't fetch it. */
+    pendingRefundPaise: (b.refunds ?? []).reduce((n, r) => n + r.amountPaise, 0),
   };
 }
 
@@ -563,6 +566,11 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
       id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
+      // Money already asked of Razorpay and not yet confirmed. Surfaced on
+      // the row because it is otherwise invisible until someone opens the
+      // booking — and it is exactly the state where doing anything else
+      // with that money goes wrong.
+      refunds: { where: { status: "PENDING" }, select: { amountPaise: true } },
       trip: { select: { title: true, slug: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
       // Lead traveller doubles as the fallback name: profiles created by a
@@ -633,6 +641,107 @@ export async function getBookingsForTrip(
     pageCount,
     /** The whole trip, regardless of what the table is filtered to. */
     totals,
+  };
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Refunds — every one, across every trip
+   ──────────────────────────────────────────────────────────────────────── */
+
+export type RefundFilters = { q?: string; status?: string; method?: string; page?: string };
+
+export type AdminRefundRow = {
+  id: string;
+  amountPaise: number;
+  status: string;
+  method: string;
+  reason: string | null;
+  razorpayRefundId: string | null;
+  externalReference: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+  processedAt: Date | null;
+  booking: {
+    reference: string;
+    status: string;
+    trip: { title: string };
+    profile: { fullName: string | null; email: string };
+  };
+  initiatedBy: { fullName: string | null; email: string } | null;
+};
+
+/**
+ * A refund raised through Razorpay is the one piece of money in this system
+ * that moves on somebody else's schedule. It can sit PENDING for hours, and
+ * until it resolves it blocks a second refund and a carry-forward on that
+ * booking — but the only place it appeared was inside the booking it belongs
+ * to. A stuck one was invisible unless you already knew to look.
+ *
+ * The screen this feeds is deliberately cross-trip: "what is in flight right
+ * now" and "what failed and nobody noticed" are questions about the business,
+ * not about one booking.
+ */
+export async function getAdminRefunds(
+  filters: RefundFilters = {},
+  perPage = PER_PAGE,
+): Promise<Paged<AdminRefundRow> & { pendingPaise: number; pendingCount: number; failedCount: number }> {
+  const and: Prisma.RefundWhereInput[] = [];
+  if (filters.status) and.push({ status: filters.status as "PENDING" });
+  if (filters.method) and.push({ method: filters.method as "RAZORPAY" });
+  if (filters.q) {
+    const q = filters.q.trim();
+    and.push({
+      OR: [
+        { booking: { reference: { contains: q, mode: "insensitive" } } },
+        { booking: { profile: { fullName: { contains: q, mode: "insensitive" } } } },
+        { booking: { profile: { email: { contains: q, mode: "insensitive" } } } },
+        { razorpayRefundId: { contains: q, mode: "insensitive" } },
+        { externalReference: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
+  const where: Prisma.RefundWhereInput = and.length ? { AND: and } : {};
+
+  const [total, pending, failedCount] = await Promise.all([
+    prisma.refund.count({ where }),
+    // Deliberately unfiltered: money in flight is a fact about the business,
+    // and it must not shrink because someone typed in the search box.
+    prisma.refund.aggregate({ where: { status: "PENDING" }, _sum: { amountPaise: true }, _count: { _all: true } }),
+    prisma.refund.count({ where: { status: "FAILED" } }),
+  ]);
+  const { page, pageCount, skip } = resolvePage(filters.page, total, perPage);
+
+  const rows = await prisma.refund.findMany({
+    where,
+    // Oldest pending first: a refund that has been in flight longest is the
+    // one most likely to have been dropped.
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    skip,
+    take: perPage,
+    select: {
+      id: true, amountPaise: true, status: true, method: true, reason: true,
+      razorpayRefundId: true, externalReference: true, failureReason: true,
+      createdAt: true, processedAt: true,
+      booking: {
+        select: {
+          reference: true, status: true,
+          trip: { select: { title: true } },
+          profile: { select: { fullName: true, email: true } },
+        },
+      },
+      initiatedBy: { select: { fullName: true, email: true } },
+    },
+  });
+
+  return {
+    rows,
+    total,
+    page,
+    perPage,
+    pageCount,
+    pendingPaise: pending._sum.amountPaise ?? 0,
+    pendingCount: pending._count._all,
+    failedCount,
   };
 }
 

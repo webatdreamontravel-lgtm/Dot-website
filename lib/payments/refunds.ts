@@ -7,11 +7,46 @@ import {
   committedGatewayRefundPaise,
   committedRefundPaise,
   pendingRefundPaise,
+  refundCommitted as refundCommittedStatus,
 } from "@/lib/booking/refunds";
 
 export type RefundResult =
   | { ok: true; refundId: string; amountPaise: number }
   | { ok: false; error: string };
+
+/**
+ * What Razorpay actually said.
+ *
+ * Their SDK rejects with a PLAIN OBJECT, not an Error — so the usual
+ * `e instanceof Error ? e.message : String(e)` produced the string
+ * "[object Object]", on screen and in refunds.failure_reason. Three failed
+ * refunds on one booking, every one of them recording nothing about why.
+ *
+ * The useful text is at error.description; everything else here is a
+ * fallback so this can never itself be the thing that hides the reason.
+ */
+export function razorpayErrorMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    const inner = o.error as Record<string, unknown> | undefined;
+    const description = inner?.description ?? o.description;
+    if (typeof description === "string" && description) {
+      const reason = typeof inner?.reason === "string" ? inner.reason : null;
+      return reason && reason !== "input_validation_failed"
+        ? `${description} (${reason})`
+        : description;
+    }
+    if (e instanceof Error && e.message) return e.message;
+    try {
+      const json = JSON.stringify(e);
+      if (json && json !== "{}") return json.slice(0, 300);
+    } catch {
+      /* fall through */
+    }
+  }
+  return e instanceof Error ? e.message : "Razorpay gave no reason.";
+}
 
 /**
  * Sends money back.
@@ -54,7 +89,7 @@ export async function requestRefund(input: {
       },
       // Every row, status included: which ones tie money up is decided by
       // committedRefundPaise, in one place, not by a where-clause here.
-      refunds: { select: { amountPaise: true, method: true, status: true } },
+      refunds: { select: { amountPaise: true, method: true, status: true, paymentId: true } },
     },
   });
 
@@ -139,54 +174,120 @@ export async function requestRefund(input: {
     };
   }
 
-  // Refund against the most recent captured payment large enough to carry it.
-  // Splitting one refund across several payments is possible but rare enough
-  // that the team is better served doing it as two refunds they can see.
-  const source = booking.payments.find((p) => p.amountPaise >= amountPaise) ?? booking.payments[0];
-  if (!source?.razorpayPaymentId) {
+  /**
+   * Razorpay refunds against ONE payment, not against a booking.
+   *
+   * This used to pick "the most recent captured payment large enough to
+   * carry it", comparing the amount against the payment's GROSS. On a
+   * booking paid in two charges — ₹6,200 then ₹4,500 — with ₹5,000 already
+   * refunded off the ₹6,200, our ceiling still read ₹5,700 while Razorpay
+   * would only allow ₹1,200 against that payment. Every attempt above that
+   * failed, and the untouched ₹4,500 was never reached at all.
+   *
+   * So the money is allocated across payments by what each one can still
+   * give back. Largest first, which makes the fewest splits.
+   */
+  const refundedAgainst = new Map<string, number>();
+  for (const rf of booking.refunds) {
+    if (!refundCommittedStatus(rf.status)) continue;
+    refundedAgainst.set(rf.paymentId, (refundedAgainst.get(rf.paymentId) ?? 0) + rf.amountPaise);
+  }
+  const sources = booking.payments
+    .map((p) => ({ ...p, remaining: p.amountPaise - (refundedAgainst.get(p.id) ?? 0) }))
+    .filter((p) => p.remaining > 0 && p.razorpayPaymentId)
+    .sort((a, b) => b.remaining - a.remaining);
+
+  if (sources.length === 0) {
     return {
       ok: false,
       error: "No online payment on this booking to refund. Return it the way it came in and record it here.",
     };
   }
 
+  const plan: { payment: (typeof sources)[number]; amountPaise: number }[] = [];
+  let unallocated = amountPaise;
+  for (const p of sources) {
+    if (unallocated <= 0) break;
+    const take = Math.min(unallocated, p.remaining);
+    plan.push({ payment: p, amountPaise: take });
+    unallocated -= take;
+  }
+  if (unallocated > 0) {
+    // The booking-wide ceiling and the per-payment reality disagreed. Say the
+    // smaller, true number rather than letting Razorpay refuse it for us.
+    const possible = sources.reduce((n, p) => n + p.remaining, 0);
+    return {
+      ok: false,
+      error:
+        `Razorpay can only send back ₹${(possible / 100).toLocaleString("en-IN")} on this ` +
+        `booking — the rest of what was paid has already been refunded against those charges.`,
+    };
+  }
+
   // Recorded BEFORE the API call. If the process dies mid-request, a PENDING
   // row with no Razorpay id is visible and recoverable; a successful refund
   // with no local record is not.
-  const refund = await prisma.refund.create({
-    data: {
-      bookingId: booking.id,
-      paymentId: source.id,
-      amountPaise,
-      status: "PENDING",
-      reason: input.reason || null,
-      notes: input.notes || null,
-      initiatedByProfileId: input.initiatedByProfileId || null,
-    },
-    select: { id: true },
-  });
+  /**
+   * One row per charge, each recorded BEFORE its API call.
+   *
+   * If the process dies mid-request a PENDING row with no Razorpay id is
+   * visible and recoverable; a successful refund with no local record is not.
+   */
+  const sent: string[] = [];
+  let sentPaise = 0;
+  let firstId: string | null = null;
 
-  try {
-    const created = await razorpay().payments.refund(source.razorpayPaymentId, {
-      amount: amountPaise,
-      speed: "normal",
-      notes: { bookingId: booking.id, reference: booking.reference, refundRowId: refund.id },
+  for (const step of plan) {
+    const row = await prisma.refund.create({
+      data: {
+        bookingId: booking.id,
+        paymentId: step.payment.id,
+        amountPaise: step.amountPaise,
+        status: "PENDING",
+        reason: input.reason || null,
+        notes: input.notes || null,
+        initiatedByProfileId: input.initiatedByProfileId || null,
+      },
+      select: { id: true },
     });
+    firstId ??= row.id;
 
-    await prisma.refund.update({
-      where: { id: refund.id },
-      data: { razorpayRefundId: created.id },
-    });
-
-    return { ok: true, refundId: refund.id, amountPaise };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    await prisma.refund.update({
-      where: { id: refund.id },
-      data: { status: "FAILED", failureReason: message.slice(0, 500) },
-    });
-    return { ok: false, error: `Razorpay refused the refund: ${message}` };
+    try {
+      const created = await razorpay().payments.refund(step.payment.razorpayPaymentId!, {
+        amount: step.amountPaise,
+        speed: "normal",
+        notes: { bookingId: booking.id, reference: booking.reference, refundRowId: row.id },
+      });
+      await prisma.refund.update({
+        where: { id: row.id },
+        data: { razorpayRefundId: created.id },
+      });
+      sent.push(row.id);
+      sentPaise += step.amountPaise;
+    } catch (e) {
+      const message = razorpayErrorMessage(e);
+      await prisma.refund.update({
+        where: { id: row.id },
+        data: { status: "FAILED", failureReason: message.slice(0, 500) },
+      });
+      /**
+       * Partial success is a real state and must be reported as one.
+       *
+       * Earlier steps have already left our account. Saying "the refund
+       * failed" would be a lie about money the customer is going to receive.
+       */
+      const money = (p: number) => `₹${(p / 100).toLocaleString("en-IN")}`;
+      return {
+        ok: false,
+        error: sentPaise
+          ? `${money(sentPaise)} is on its way back, but Razorpay refused the remaining ` +
+            `${money(amountPaise - sentPaise)}: ${message}`
+          : `Razorpay refused the refund: ${message}`,
+      };
+    }
   }
+
+  return { ok: true, refundId: firstId!, amountPaise };
 }
 
 /**
