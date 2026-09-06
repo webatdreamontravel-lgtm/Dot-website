@@ -1,11 +1,11 @@
 {
   "name": "dot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3009",
     "build": "prisma generate && prisma migrate deploy && next build",
-    "start": "next start -p 3009",
+    "start": "next start -p 3000",
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
