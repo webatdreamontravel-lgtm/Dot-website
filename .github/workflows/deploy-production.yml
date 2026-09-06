@@ -300,7 +300,16 @@ jobs:
           tar -xzf "$TARBALL" -C "$STAGE" || fail "Tarball is corrupt."
           [ -f "$STAGE/server.js" ] || fail "Bundle has no server.js — the build did not produce a standalone output."
 
-          cp "$ENV_PATH" "$STAGE/.env"
+          ENV_PATH="${ENV_PATH/#\~/$HOME}"
+
+          if [ -f "$ENV_PATH" ]; then
+            cp "$ENV_PATH" "$STAGE/.env"
+          elif [ -f "$APP_DIR/.env" ]; then
+            echo "    staged env not found at $ENV_PATH — carrying the existing .env forward"
+            cp "$APP_DIR/.env" "$STAGE/.env"
+          else
+            fail "No .env available: nothing at $ENV_PATH and no $APP_DIR/.env to fall back on. The app would start with no database credentials."
+          fi
           chmod 600 "$STAGE/.env"
 
           for keep in ecosystem.config.js ecosystem.config.cjs ecosystem.json .env.local; do
