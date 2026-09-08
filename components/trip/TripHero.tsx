@@ -92,7 +92,22 @@ export function TripHero({ trip }: { trip: TripDetailView }) {
             transition={{ duration: 0.5, delay: 0.35 }}
             className="mt-9"
           >
-            {isSoldOut ? (
+            {/* A departed trip is still reachable by link — someone opens a
+                WhatsApp message from three weeks ago — so the page stays and
+                the offer goes. Booking it would 404 at /book anyway, which
+                is a worse way to find out. The way forward matters as much
+                as the refusal: a dead button on its own leaves someone who
+                wanted to travel with nowhere to go. */}
+            {trip.departed ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="btn cursor-not-allowed border border-cream/20 bg-cream/15 text-cream/60">
+                  This trip has already run
+                </span>
+                <Link href="/trips" className="btn btn-yellow">
+                  See upcoming trips <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
+            ) : isSoldOut ? (
               <span className="btn bg-cream/15 text-cream/60 border border-cream/20">
                 Sold out
               </span>

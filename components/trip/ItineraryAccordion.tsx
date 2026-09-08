@@ -1,5 +1,6 @@
 "use client";
 
+import { IMAGE_SLOTS } from "@/lib/imageSlots";
 import * as Accordion from "@radix-ui/react-accordion";
 import { motion } from "framer-motion";
 import { ChevronDown } from "lucide-react";
@@ -55,6 +56,13 @@ export function ItineraryAccordion({ days }: { days: ItineraryDay[] }) {
                     src={day.image}
                     alt={day.title}
                     loading="lazy"
+                    /* Held to the slot's shape rather than the file's. With no
+                       height set, each day rendered at whatever aspect its
+                       photo happened to have — a 1.83 band above a 0.67
+                       column — which is what made the itinerary look ragged.
+                       New uploads are cropped to this; older ones are
+                       centre-cropped into it. */
+                    style={{ aspectRatio: IMAGE_SLOTS.day.css }}
                     className="mt-4 w-full rounded-2xl object-cover"
                   />
                 )}

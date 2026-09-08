@@ -1,5 +1,6 @@
 "use client";
 
+import { IMAGE_SLOTS } from "@/lib/imageSlots";
 import { useCallback, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
 
@@ -138,7 +139,7 @@ export function ItineraryEditor({
             />
             <ImageUpload
               slot={`day-${i + 1}`}
-              aspect="4 / 3"
+              aspect={IMAGE_SLOTS.day.css}
               compact
               defaultValue={row.image}
               onChange={(url) => patch(row.key, { image: url })}

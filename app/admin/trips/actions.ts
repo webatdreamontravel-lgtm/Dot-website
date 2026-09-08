@@ -119,6 +119,7 @@ const schema = z
     showSeatsLeft: z.coerce.boolean().default(true),
 
     status: z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]).default("DRAFT"),
+    showOnHomepage: z.coerce.boolean().default(true),
     isFeatured: z.coerce.boolean().default(false),
 
     introduction: optionalJson,
@@ -179,10 +180,58 @@ async function uniqueSlug(base: string, ignoreId?: string) {
 function parse(formData: FormData) {
   const raw = Object.fromEntries(formData.entries());
   // Unchecked checkboxes simply aren't in FormData, so absence means false.
-  for (const key of ["autoCloseWhenFull", "showSeatsLeft", "isFeatured"]) {
+  for (const key of ["autoCloseWhenFull", "showSeatsLeft", "showOnHomepage", "isFeatured"]) {
     raw[key] = formData.get(key) === "on" ? "true" : "";
   }
   return schema.safeParse(raw);
+}
+
+/**
+ * Keeps the large homepage card to exactly one trip.
+ *
+ * Enforced here rather than by a partial unique index because the rule is
+ * "the newest claim wins", not "the second one is rejected" — someone
+ * promoting a trip should not have to go and find whichever other trip is
+ * currently featured and clear it first.
+ *
+ * Only when the claiming trip is PUBLISHED. A draft cannot appear on the
+ * homepage, so clearing the live card for it would leave the rail with no
+ * highlight until the draft went live.
+ *
+ * Runs inside the caller's transaction so the homepage is never briefly
+ * showing two big cards or none.
+ *
+ * Returns the trips it demoted, so a change made to a row the admin was not
+ * looking at still reaches the audit log.
+ */
+/** One audit row per trip that lost the big card, so the change is traceable. */
+async function logDemotions(actorProfileId: string, tripIds: string[]) {
+  if (tripIds.length === 0) return;
+  await prisma.auditLog.createMany({
+    data: tripIds.map((entityId) => ({
+      actorProfileId,
+      action: "trip.unfeature",
+      entity: "trip",
+      entityId,
+    })),
+  });
+}
+
+async function claimBigCard(
+  tx: Prisma.TransactionClient,
+  tripId: string,
+): Promise<string[]> {
+  const demoted = await tx.trip.findMany({
+    where: { id: { not: tripId }, isFeatured: true },
+    select: { id: true },
+  });
+  if (demoted.length === 0) return [];
+
+  await tx.trip.updateMany({
+    where: { id: { in: demoted.map((t) => t.id) } },
+    data: { isFeatured: false },
+  });
+  return demoted.map((t) => t.id);
 }
 
 function toFieldErrors(error: z.ZodError) {
@@ -222,6 +271,14 @@ function buildData(d: z.infer<typeof schema>) {
     autoCloseWhenFull: d.autoCloseWhenFull,
     showSeatsLeft: d.showSeatsLeft,
     status: d.status,
+    /**
+     * The big card implies the homepage.
+     *
+     * A trip flagged as the large card but not on the rail is a setting that
+     * silently does nothing, so ticking one ticks the other rather than
+     * letting the pair reach an unusable combination.
+     */
+    showOnHomepage: d.showOnHomepage || d.isFeatured,
     isFeatured: d.isFeatured,
     publishedAt: d.status === "PUBLISHED" ? new Date() : null,
     ...(d.introduction !== undefined ? { introduction: d.introduction as Prisma.InputJsonValue } : {}),
@@ -314,15 +371,23 @@ export async function createTrip(
   const slug = await uniqueSlug(slugify(d.title));
 
   let id: string;
+  let demoted: string[] = [];
   try {
-    const trip = await prisma.trip.create({
-      data: { slug, totalSeats: d.totalSeats, seatsBooked: 0, ...buildData(d) },
-      select: { id: true },
-    });
-    id = trip.id;
+    ({ id, demoted } = await prisma.$transaction(async (tx) => {
+      const trip = await tx.trip.create({
+        data: { slug, totalSeats: d.totalSeats, seatsBooked: 0, ...buildData(d) },
+        select: { id: true },
+      });
+      return {
+        id: trip.id,
+        demoted:
+          d.isFeatured && d.status === "PUBLISHED" ? await claimBigCard(tx, trip.id) : [],
+      };
+    }));
   } catch (e) {
     return { error: `Couldn't save the trip: ${(e as Error).message}` };
   }
+  await logDemotions(admin.id, demoted);
 
   // Reviews live in their own table, so they're written after the trip
   // exists and has an id.
@@ -372,14 +437,19 @@ export async function updateTrip(
 
   const data = buildData(d);
 
+  let demoted: string[] = [];
   try {
-    await prisma.trip.update({
-      data: { slug, totalSeats: d.totalSeats, ...data },
-      where: { id },
+    demoted = await prisma.$transaction(async (tx) => {
+      await tx.trip.update({
+        data: { slug, totalSeats: d.totalSeats, ...data },
+        where: { id },
+      });
+      return d.isFeatured && d.status === "PUBLISHED" ? await claimBigCard(tx, id) : [];
     });
   } catch (e) {
     return { error: `Couldn't save the trip: ${(e as Error).message}` };
   }
+  await logDemotions(admin.id, demoted);
 
   await cleanUpOrphanedImages(existing, { ...existing, ...data });
 

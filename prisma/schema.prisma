@@ -284,6 +284,15 @@ model Trip {
   /// losing the distinction between "still being written" and "taken down".
   /// A trip must be BOTH published and active to appear anywhere public.
   isActive    Boolean    @default(true) @map("is_active")
+  /// Whether a published trip appears in the homepage rail at all.
+  ///
+  /// Separate from isFeatured, which only decides which ONE of the trips on
+  /// the homepage gets the large card. Defaults true because that was the
+  /// behaviour before this existed — every published trip was on the
+  /// homepage — so adding the column changes nothing until it is unticked.
+  showOnHomepage Boolean @default(true) @map("show_on_homepage")
+  /// The single large card on the homepage. Kept to at most one across all
+  /// trips at save time rather than by a constraint — see saveTrip.
   isFeatured  Boolean    @default(false) @map("is_featured")
   publishedAt DateTime?  @map("published_at") @db.Timestamptz(3)
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import * as Accordion from "@radix-ui/react-accordion";
 import { Check, ChevronDown, X } from "lucide-react";
 
@@ -125,9 +126,19 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
         />
         <div className="grain opacity-[0.05]" aria-hidden />
         <div className="relative mx-auto max-w-3xl px-4 md:px-8 text-center">
-          <p className="font-script text-2xl text-yellow">Lock your slot</p>
+          {/* The whole panel is an offer, not just the button under it.
+              Leaving "Pay ₹230 advance to confirm your spot" above a
+              See-upcoming-trips button on a trip that ran last month reads as
+              a live price with a broken button. */}
+          <p className="font-script text-2xl text-yellow">
+            {trip.departed ? "That one's been and gone" : "Lock your slot"}
+          </p>
           <AnimatedHeading className="mt-2 text-4xl md:text-7xl">
-            {trip.advance ? (
+            {trip.departed ? (
+              <>
+                This trip has <span className="italic">already run</span>.
+              </>
+            ) : trip.advance ? (
               <>
                 Pay {formatINR(payNow)} <span className="italic">advance</span>
                 <br />
@@ -140,7 +151,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
             )}
           </AnimatedHeading>
 
-          {!isSoldOut && trip.showSeatsLeft && (
+          {!trip.departed && !isSoldOut && trip.showSeatsLeft && (
             <p className="mt-6 inline-flex items-center gap-2 rounded-full border border-yellow/30 bg-yellow/10 px-4 py-2 text-sm font-semibold text-yellow">
               <span className="pulse-dot" />
               {/* "Only 20 of 20 seats left" on a batch nobody has booked is
@@ -153,8 +164,18 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
           )}
 
           <p className="mt-6 text-cream/70 max-w-xl mx-auto leading-relaxed">
-            Slots are first-come-first-serve. We&apos;ll add you to the private trip
-            WhatsApp group once you&apos;re confirmed.
+            {trip.departed ? (
+              <>
+                We run these every few weeks — the next one may already be open.
+                Have a look, or message us and we&apos;ll tell you when this one
+                comes round again.
+              </>
+            ) : (
+              <>
+                Slots are first-come-first-serve. We&apos;ll add you to the private
+                trip WhatsApp group once you&apos;re confirmed.
+              </>
+            )}
           </p>
 
           {trip.tcsPercent > 0 && (
@@ -174,7 +195,11 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
           )}
 
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-3">
-            {isSoldOut ? (
+            {trip.departed ? (
+              <Link href="/trips" className="btn btn-yellow">
+                See upcoming trips
+              </Link>
+            ) : isSoldOut ? (
               <a href={siteConfig.whatsappUrl} target="_blank" rel="noreferrer" className="btn btn-yellow">
                 Sold out — join the waitlist
               </a>
@@ -184,7 +209,7 @@ export function TripPageBody({ trip }: { trip: TripDetailView }) {
               </a>
             )}
             <a href={siteConfig.whatsappUrl} target="_blank" rel="noreferrer" className="btn btn-ghost">
-              Talk to us first
+              {trip.departed ? "Ask about the next one" : "Talk to us first"}
             </a>
           </div>
         </div>

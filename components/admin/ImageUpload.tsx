@@ -4,7 +4,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { AlertCircle, ImagePlus, Loader2, Trash2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { slotFor } from "@/lib/imageSlots";
 import { ACCEPT_ATTRIBUTE, MAX_UPLOAD_MB, uploadImage } from "@/lib/uploadImage";
+import { ImageCropper } from "@/components/admin/ImageCropper";
 
 /**
  * Picks, compresses and uploads a photo, then holds the resulting public
@@ -46,6 +48,18 @@ export function ImageUpload({
 
   const [preview, setPreview] = useState<string | null>(null);
 
+  /**
+   * The picked file, waiting to be cropped.
+   *
+   * Every photo goes through the cropper, including one already at the right
+   * shape — the frame just starts as the whole image and Use photo is one
+   * tap. A cropper that only appears sometimes is one nobody learns to
+   * expect, and the interesting part of a photo is rarely dead centre
+   * anyway. Slots with no fixed shape (rich-text images) skip it entirely.
+   */
+  const [pendingCrop, setPendingCrop] = useState<File | null>(null);
+  const cropSlot = slotFor(slot);
+
   // Object URLs pin the file in memory until revoked.
   const revokePreview = useRef<(() => void) | null>(null);
   useEffect(() => () => revokePreview.current?.(), []);
@@ -56,7 +70,7 @@ export function ImageUpload({
     setPreview(null);
   }
 
-  async function handleFile(file: File) {
+  function handleFile(file: File) {
     setError(null);
 
     if (!["image/jpeg", "image/png"].includes(file.type)) {
@@ -71,6 +85,17 @@ export function ImageUpload({
       return;
     }
 
+    // Checked before the cropper, not after: refusing a 30MB photo is
+    // instant, and opening a full-screen editor first only to reject it
+    // wastes the one thing a phone upload is short of.
+    if (cropSlot) {
+      setPendingCrop(file);
+      return;
+    }
+    void upload(file);
+  }
+
+  async function upload(file: File) {
     // Show the photo immediately. Compression alone can take a moment, and
     // the upload longer, so waiting for S3 to answer before showing anything
     // reads as though the pick didn't register.
@@ -112,6 +137,22 @@ export function ImageUpload({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {pendingCrop && cropSlot && (
+        <ImageCropper
+          file={pendingCrop}
+          slot={cropSlot}
+          onCancel={() => {
+            setPendingCrop(null);
+            // Without this the same file can't be picked again — the input
+            // fires no change event when its value is unchanged.
+            if (fileRef.current) fileRef.current.value = "";
+          }}
+          onCropped={(cropped) => {
+            setPendingCrop(null);
+            void upload(cropped);
+          }}
+        />
+      )}
       {label && <span className="text-[0.82rem] font-semibold text-[#16203a]">{label}</span>}
       {hint && <span className="-mt-0.5 text-[0.78rem] text-[#8b96ad]">{hint}</span>}
 
