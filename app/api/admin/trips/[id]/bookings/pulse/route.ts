@@ -10,7 +10,7 @@ import { prisma } from "@/lib/prisma";
  * only way to see a new one was to refresh. This is what the page polls.
  *
  * It deliberately returns a signature rather than the rows. Sending the table
- * every second would be the same page load every second; a count and the
+ * on every poll would be the same page load on every poll; a count and the
  * latest `updated_at` are two aggregates over one index, and the page only
  * does real work on the tick where they actually move.
  *
@@ -42,8 +42,8 @@ export async function GET(
       count: agg._count._all,
       latest: agg._max.updatedAt?.toISOString() ?? null,
     },
-    // Polled every second: a cached answer is the one thing that would make
-    // this pointless.
+    // The whole point is freshness — a cached answer is the one thing that
+    // would make this pointless.
     { headers: { "Cache-Control": "no-store" } },
   );
 }
