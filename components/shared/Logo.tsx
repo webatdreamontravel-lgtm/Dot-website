@@ -8,9 +8,9 @@ type LogoProps = {
    * What the logo is sitting on — not what colour the logo is.
    *
    * "dark" means dark text on a cream navbar, where the artwork's own navy
-   * and teal already read: the logo goes down bare. "light" means the navbar
-   * is transparent over a hero photograph, where navy-on-navy is invisible,
-   * so it gets a cream chip.
+   * and teal already read: the logo goes down bare. "light" means a dark
+   * ground -- the footer, or a transparent navbar over a hero photograph --
+   * where navy-on-navy is invisible, so it gets the white lockup.
    *
    * The prop existed before this and picked between two identical class
    * strings, so it had never changed anything.
@@ -44,13 +44,16 @@ export function Logo({ className, variant = "light" }: LogoProps) {
         The navy in the artwork measures 1.08–1.48:1 against the hero — the
         same luminance as the background, so it simply is not there. That is
         what the old baked-in panel was covering for, and a cream chip is
-        still a rectangle. So the dark background gets a reversed logo
-        instead: navy → cream, teal → the brighter teal. 6.8–13.2:1 for the
-        cream and 3.4–6.6:1 for the teal, all clear of the 3:1 a graphic
-        needs, and nothing boxed in.
+        still a rectangle. So the dark ground gets the brand's white lockup
+        instead: 16.5:1 on the footer navy, and white is the brightest fill
+        there is, so wherever the hero scrim carried the cream it carries
+        this. One flat colour, no teal to lose against blue water.
+ 
+        Same 312x126 frame as the mark with the artwork at the same offset,
+        so the two swap without moving a pixel.
       */}
       <Image
-        src={variant === "light" ? "/images/dot-logo-light.png" : "/images/dot-logo-mark.png"}
+        src={variant === "light" ? "/images/dot-logo-white.png" : "/images/dot-logo-mark.png"}
         alt="Dream On Travel"
         width={312}
         height={126}
