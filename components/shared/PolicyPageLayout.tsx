@@ -24,7 +24,7 @@ export function PolicyPageLayout({
           <div className="grid lg:grid-cols-[1fr_280px] gap-12">
             <article>
               <p className="font-script text-2xl text-teal">{kicker}</p>
-              <h1 className="mt-2 font-display text-4xl md:text-6xl tracking-tight leading-[1.02]">
+              <h1 className="mt-2 font-display text-3xl md:text-6xl tracking-tight leading-[1.02]">
                 {title}
               </h1>
               <p className="mt-4 text-sm text-navy/55">

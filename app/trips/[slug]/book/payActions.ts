@@ -45,6 +45,7 @@ export async function startPayment(input: {
       fullName: t.fullName.trim(),
       phone: t.phone.trim(),
       email: t.email.trim(),
+      gender: t.gender,
     })),
   });
 

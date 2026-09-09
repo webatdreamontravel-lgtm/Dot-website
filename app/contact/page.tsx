@@ -47,12 +47,12 @@ export default function ContactPage() {
       <main className="bg-cream pt-32 md:pt-40 pb-24">
         <section className="mx-auto max-w-7xl px-6 md:px-8">
           <p className="font-script text-2xl text-teal">Hello, hello →</p>
-          <AnimatedHeading as="h1" className="mt-2 text-5xl md:text-8xl">
+          <AnimatedHeading as="h1" className="mt-2 text-4xl md:text-8xl">
             Drop us a line.
             <br />
             <span className="italic text-coral">Or three.</span>
           </AnimatedHeading>
-          <p className="mt-6 max-w-xl text-lg text-navy/65">
+          <p className="mt-6 max-w-xl text-base text-navy/65 md:text-lg">
             Bookings, trip questions, partnerships, or just to chat — we read everything.
           </p>
 
@@ -81,7 +81,7 @@ export default function ContactPage() {
           {/* Address + form */}
           <div className="mt-20 grid lg:grid-cols-5 gap-10 lg:gap-14 items-start">
             <div className="lg:col-span-2">
-              <h2 className="font-display text-4xl md:text-5xl">Visit us</h2>
+              <h2 className="font-display text-3xl md:text-5xl">Visit us</h2>
               <p className="mt-3 font-script text-2xl text-coral">If you&apos;re ever in Coimbatore.</p>
 
               <ul className="mt-8 space-y-5">
@@ -133,7 +133,7 @@ export default function ContactPage() {
                 worse than one that doesn't offer it, so these are the
                 channels that actually reach someone. */}
             <div className="lg:col-span-3 rounded-3xl border border-navy/10 bg-cream-soft p-8 md:p-10">
-              <h2 className="font-display text-4xl md:text-5xl">Talk to us.</h2>
+              <h2 className="font-display text-3xl md:text-5xl">Talk to us.</h2>
               <p className="mt-3 text-navy/65">
                 We reply within a day, often sooner. WhatsApp is fastest — it&apos;s where the
                 trip leads actually are.

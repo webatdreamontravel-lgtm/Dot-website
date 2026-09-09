@@ -66,7 +66,7 @@ export function TripCard({ trip, featured = false, index = 0 }: TripCardProps) {
       <div className="absolute inset-0 bg-gradient-to-br from-navy/20 to-transparent" />
 
       <div className="absolute top-5 left-5 z-10">
-        <span className={cn("pill text-[0.7rem] font-semibold", status.className)}>
+        <span className={cn("pill text-[0.75rem] font-semibold", status.className)}>
           {status.pulse && <span className="pulse-dot" />}
           {status.label}
         </span>
@@ -74,7 +74,7 @@ export function TripCard({ trip, featured = false, index = 0 }: TripCardProps) {
 
       {trip.category && (
         <div className="absolute top-5 right-5 z-10">
-          <span className="pill bg-cream/10 backdrop-blur text-cream/85 text-[0.7rem] border border-cream/20">
+          <span className="pill bg-cream/10 backdrop-blur text-cream/85 text-[0.75rem] border border-cream/20">
             {trip.category}
           </span>
         </div>
@@ -84,7 +84,7 @@ export function TripCard({ trip, featured = false, index = 0 }: TripCardProps) {
         <h3
           className={cn(
             "font-display tracking-tight leading-[0.95] mb-3",
-            featured ? "text-4xl md:text-6xl" : "text-3xl md:text-4xl",
+            featured ? "text-3xl md:text-6xl" : "text-3xl md:text-4xl",
           )}
         >
           {trip.title}
@@ -133,7 +133,7 @@ export function TripCard({ trip, featured = false, index = 0 }: TripCardProps) {
             <p className="text-xs uppercase tracking-[0.18em] text-cream/55">
               From
               {trip.offerLabel && (
-                <span className="ml-2 rounded-full bg-coral px-2 py-0.5 text-[0.62rem] font-bold tracking-wider text-white">
+                <span className="ml-2 rounded-full bg-coral px-2 py-0.5 text-[0.75rem] font-bold tracking-wider text-white">
                   {trip.offerLabel}
                 </span>
               )}

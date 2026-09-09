@@ -764,11 +764,12 @@ export async function getAdminBooking(reference: string) {
           startDate: true, endDate: true, advancePaise: true,
         },
       },
-      profile: { select: { id: true, fullName: true, email: true, phone: true, city: true } },
+      profile: { select: { id: true, fullName: true, email: true, phone: true, city: true, gender: true } },
       travellers: {
         orderBy: { createdAt: "asc" },
         select: {
           id: true, fullName: true, phone: true, email: true,
+          gender: true,
           cancelledAt: true,
           emergencyContactName: true, emergencyContactPhone: true,
         },

@@ -11,6 +11,8 @@ import {
 
 import { cn } from "@/lib/utils";
 import { ACCEPT_ATTRIBUTE, uploadImage } from "@/lib/uploadImage";
+import { CONTENT_SHAPES } from "@/lib/imageSlots";
+import { ImageCropper } from "@/components/admin/ImageCropper";
 
 /**
  * Tiptap editor storing ProseMirror JSON — the same shape the public page's
@@ -74,6 +76,18 @@ export function RichTextEditor({
     };
   }, [editor, onChange]);
 
+  /**
+   * Picked, waiting to be cropped.
+   *
+   * Content photos go through the same cropper as the card and hero, but
+   * with a choice of three shapes rather than one locked shape — see
+   * CONTENT_SHAPES. Before this, a section image was stored at whatever
+   * aspect it arrived with and rendered by RichText at `w-full` with no
+   * height, so two photos in one section could be a wide band and a tall
+   * column. Now every one of them is one of three known shapes.
+   */
+  const [pendingCrop, setPendingCrop] = useState<File | null>(null);
+
   const insertImage = useCallback(
     async (file: File) => {
       if (!editor) return;
@@ -94,6 +108,23 @@ export function RichTextEditor({
 
   return (
     <div className="overflow-hidden rounded-xl border border-[#e3e7ee] bg-white focus-within:border-teal focus-within:ring-[3px] focus-within:ring-teal/12">
+      {pendingCrop && (
+        <ImageCropper
+          file={pendingCrop}
+          slot={CONTENT_SHAPES[0]}
+          shapes={CONTENT_SHAPES}
+          onCancel={() => {
+            setPendingCrop(null);
+            // The input fires no change event for an unchanged value, so
+            // without this the same photo can't be picked again.
+            if (fileRef.current) fileRef.current.value = "";
+          }}
+          onCropped={(cropped) => {
+            setPendingCrop(null);
+            void insertImage(cropped);
+          }}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-0.5 border-b border-[#e3e7ee] bg-[#fbfcfe] px-2 py-1.5">
         <Tb editor={editor} onClick={(e) => e.chain().focus().toggleBold().run()} active={editor?.isActive("bold")} label="Bold">
           <Bold className="h-3.5 w-3.5" />
@@ -170,7 +201,7 @@ export function RichTextEditor({
         className="sr-only"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) void insertImage(file);
+          if (file) setPendingCrop(file);
         }}
       />
 

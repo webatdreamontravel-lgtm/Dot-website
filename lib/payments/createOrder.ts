@@ -1,7 +1,8 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { computePricing, MAX_SEATS_PER_BOOKING } from "@/lib/booking/pricing";
+import { computePricing, MAX_SEATS_PER_PUBLIC_BOOKING } from "@/lib/booking/pricing";
+import { genderRequiredForSeat, isTravellerGender, type TravellerGender } from "@/lib/booking/travellers";
 import { nextBookingReference } from "@/lib/booking/reference";
 import { balanceDueDate } from "@/lib/booking/instalments";
 import { razorpay } from "@/lib/payments/client";
@@ -14,6 +15,8 @@ export type TravellerInput = {
   fullName: string;
   phone: string;
   email: string;
+  /** Required on every seat but the first. See genderRequiredForSeat. */
+  gender?: TravellerGender;
 };
 
 /**
@@ -82,8 +85,14 @@ export async function createPaymentOrder(input: {
 }): Promise<OrderResult> {
   const { slug, profileId, seats, travellers } = input;
 
-  if (seats < 1 || seats > MAX_SEATS_PER_BOOKING || travellers.length !== seats) {
+  if (seats < 1 || seats > MAX_SEATS_PER_PUBLIC_BOOKING || travellers.length !== seats) {
     return { ok: false, error: "Traveller details don't match the number of seats." };
+  }
+
+  // Re-checked here and not only in the form: this is a server action, so the
+  // payload is whatever the caller sends, form or not.
+  if (travellers.some((t, i) => genderRequiredForSeat(i) && !isTravellerGender(t.gender))) {
+    return { ok: false, error: "Tell us the gender of everyone travelling with you." };
   }
 
   const trip = await prisma.trip.findFirst({
@@ -123,6 +132,17 @@ export async function createPaymentOrder(input: {
   // Deliberately NOT filtered by seat count: a booking for a different
   // number of seats still holds seats, and has to be dealt with rather than
   // ignored. See the two branches below.
+  /**
+   * Seat one belongs to the account holder, who answered this at signup, so
+   * it is copied rather than asked for a second time at checkout. Read here
+   * rather than taken from the caller: this is a server action's entry point
+   * and the browser doesn't get to say who it is.
+   */
+  const account = await prisma.profile.findUnique({
+    where: { id: profileId },
+    select: { gender: true },
+  });
+
   const existing = await prisma.booking.findFirst({
     where: {
       profileId,
@@ -276,6 +296,7 @@ export async function createPaymentOrder(input: {
               fullName: t.fullName,
               phone: t.phone,
               email: t.email,
+              gender: (i === 0 ? account?.gender : t.gender) ?? null,
               emergencyContactName: i === 0 ? input.emergencyContactName || null : null,
               emergencyContactPhone: i === 0 ? input.emergencyContactPhone || null : null,
             })),

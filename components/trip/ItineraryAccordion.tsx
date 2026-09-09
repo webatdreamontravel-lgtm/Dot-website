@@ -1,5 +1,6 @@
 "use client";
 
+import { IMAGE_SLOTS } from "@/lib/imageSlots";
 import * as Accordion from "@radix-ui/react-accordion";
 import { motion } from "framer-motion";
 import { ChevronDown } from "lucide-react";
@@ -30,7 +31,7 @@ export function ItineraryAccordion({ days }: { days: ItineraryDay[] }) {
                 <div className="flex items-start gap-3 md:gap-6">
                   <div className="flex-shrink-0">
                     <div className="relative h-14 w-14 md:h-16 md:w-16 rounded-2xl bg-navy text-cream flex flex-col items-center justify-center font-display group-data-[state=open]:bg-teal transition-colors">
-                      <span className="text-[10px] uppercase tracking-[0.18em] opacity-70">Day</span>
+                      <span className="text-[0.75rem] uppercase tracking-[0.18em] opacity-70">Day</span>
                       <span className="text-2xl leading-none">{day.dayNumber}</span>
                       <span className="absolute inset-0 rounded-2xl ring-2 ring-yellow opacity-0 group-data-[state=open]:opacity-100 group-data-[state=open]:animate-ping" />
                     </div>
@@ -55,6 +56,13 @@ export function ItineraryAccordion({ days }: { days: ItineraryDay[] }) {
                     src={day.image}
                     alt={day.title}
                     loading="lazy"
+                    /* Held to the slot's shape rather than the file's. With no
+                       height set, each day rendered at whatever aspect its
+                       photo happened to have — a 1.83 band above a 0.67
+                       column — which is what made the itinerary look ragged.
+                       New uploads are cropped to this; older ones are
+                       centre-cropped into it. */
+                    style={{ aspectRatio: IMAGE_SLOTS.day.css }}
                     className="mt-4 w-full rounded-2xl object-cover"
                   />
                 )}

@@ -56,6 +56,7 @@ export default async function EditTripPage({
     autoCloseWhenFull: trip.autoCloseWhenFull,
     showSeatsLeft: trip.showSeatsLeft,
     status: trip.status,
+    showOnHomepage: trip.showOnHomepage,
     isFeatured: trip.isFeatured,
     introduction: trip.introduction,
     itinerary: trip.itinerary,

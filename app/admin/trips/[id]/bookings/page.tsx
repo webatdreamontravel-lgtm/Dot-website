@@ -8,6 +8,7 @@ import { formatINR } from "@/lib/utils";
 import { BOOKING_TONE, bookingTone, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../../ui";
 import { FilterBar, FilterField, FilterSelect, filterInputClass } from "../../../FilterBar";
 import { Pagination } from "../../../Pagination";
+import { LiveBookings } from "./LiveBookings";
 
 export const metadata = { title: "Booking details" };
 
@@ -69,6 +70,10 @@ export default async function TripBookingsPage({
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* Sits with the actions rather than over the table: it appears for
+              about a second at a time, and a strip that shows and hides above
+              the rows would shift them under the cursor. */}
+          <LiveBookings tripId={id} />
           <Link
             href={`/admin/trips/${id}`}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3e7ee] bg-white px-3.5 py-2 text-[0.85rem] hover:bg-[#eef1f6]"

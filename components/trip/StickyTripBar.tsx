@@ -38,10 +38,16 @@ export function StickyTripBar({ trip }: { trip: TripDetailView }) {
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-right">
-                  <p className="text-xs uppercase tracking-[0.18em] text-navy/55">From</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-navy/55">
+                    {trip.departed ? "Was" : "From"}
+                  </p>
                   <p className="font-medium">{formatINR(minPrice)} <span className="text-sm text-navy/55">{taxSuffix(trip.gstPercent, trip.tcsPercent)}</span></p>
                 </div>
-                {isSoldOut ? (
+                {trip.departed ? (
+                  <Link href="/trips" className="btn btn-primary">
+                    See upcoming trips
+                  </Link>
+                ) : isSoldOut ? (
                   <span className="btn bg-navy/15 text-navy/50">Sold Out</span>
                 ) : (
                   /* Straight to checkout. It used to be href="#book", which
@@ -68,10 +74,16 @@ export function StickyTripBar({ trip }: { trip: TripDetailView }) {
             className="md:hidden fixed inset-x-0 bottom-0 z-40 bg-cream border-t border-navy/10 px-4 py-3 flex items-center gap-3 shadow-[0_-12px_32px_-12px_rgba(15,30,61,0.2)]"
           >
             <div className="flex-1">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-navy/55">From</p>
+              <p className="text-[0.75rem] uppercase tracking-[0.18em] text-navy/55">
+                {trip.departed ? "Was" : "From"}
+              </p>
               <p className="font-display text-xl leading-tight">{formatINR(minPrice)}</p>
             </div>
-            {isSoldOut ? (
+            {trip.departed ? (
+              <Link href="/trips" className="btn btn-primary flex-1 justify-center">
+                See upcoming trips
+              </Link>
+            ) : isSoldOut ? (
               <span className="btn bg-navy/15 text-navy/50 flex-1 justify-center">Sold Out</span>
             ) : (
               <Link

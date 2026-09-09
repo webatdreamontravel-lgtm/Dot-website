@@ -350,7 +350,7 @@ function VerifyStep({
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <fieldset>
-      <legend className="mb-2.5 text-[0.72rem] font-semibold uppercase tracking-[0.11em] text-navy/40">
+      <legend className="mb-2.5 text-[0.75rem] font-semibold uppercase tracking-[0.11em] text-navy/40">
         {label}
       </legend>
       <div className="grid gap-3.5 sm:grid-cols-2">{children}</div>

@@ -12,6 +12,17 @@
   --color-fg: #0f1e3d;
   --color-bg: #fef9e7;
 
+  /* Cards that float over a hero photograph. Named here rather than written
+     as arbitrary values at each use, so the two depths stay a pair and any
+     other hero that grows one of these cards inherits the same elevation.
+     `-lg` is the nearer card; the difference in depth is what makes the two
+     read as stacked rather than adjacent. */
+  --shadow-float: 0 16px 40px -24px rgba(6, 16, 35, 0.8);
+  --shadow-float-lg: 0 24px 70px -28px rgba(6, 16, 35, 0.95);
+
+  /* The search bar's own radius: rounder than a card, squarer than a pill. */
+  --radius-capsule: 1.75rem;
+
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
   --font-script: var(--font-caveat), cursive;
@@ -211,11 +222,11 @@ body {
   content: "Start writing…"; color: #8b96ad; float: left; height: 0; pointer-events: none;
 }
 
-/* ── Admin date range picker ──
+/* ── Date range picker ──
    react-datepicker ships a functional but generic stylesheet; this pulls it
-   into the admin panel's palette. Scoped to .dot-datepicker, the
-   calendarClassName set in components/admin/DateRangeField.tsx, so the
-   library's defaults can't reach anything else. */
+   into the palette. Scoped to .dot-datepicker, the calendarClassName set in
+   components/shared/DateRangeField.tsx, so the library's defaults can't
+   reach anything else. */
 .dot-datepicker.react-datepicker {
   font-family: inherit;
   font-size: 0.615rem;
@@ -233,6 +244,40 @@ body {
   align-items: flex-start;
 }
 .dot-datepicker .react-datepicker__month-container { float: none; }
+
+/* The library's popper ships at z-index 1, which loses to two different
+   things on the same page.
+
+   The trip cards animate in, so each is its own stacking context, and they
+   painted over an open calendar — day numbers legible, card badges sitting
+   on top of them.
+
+   Worse, the navbar is fixed at z-50. Once the page is scrolled, the date
+   field sits low enough that floating-ui flips the calendar upward, and its
+   top slid under the navbar: two months of numbers with no month name and
+   no weekday row, because that band was behind the header.
+
+   60 clears both, and stays under the preview banner (70/80) and the cursor
+   follower (100). A date popover covering the navbar while open is the
+   ordinary behaviour for one. */
+/* The class is doubled to raise specificity to 0-2-0. react-datepicker's own
+   stylesheet is imported from inside DateRangeField.tsx, so Next injects it
+   AFTER this file — at equal specificity the library's `z-index: 1` wins on
+   source order, and a single-class rule here silently does nothing. */
+.react-datepicker-popper.react-datepicker-popper { z-index: 60; }
+
+/* The public trip filter needs the same calendar at a readable size. The
+   admin bar is dense by design and 0.615rem puts its day numbers at about
+   10px, which is fine in a tool you use all day and not fine on a page a
+   first-time visitor is picking dates on. Everything inside is sized in em,
+   so one font-size scales the whole calendar proportionally. */
+.dot-datepicker--lg.react-datepicker { font-size: 0.92rem; }
+
+/* The search capsule draws ONE focus ring, on the rounded container. Without
+   this the global *:focus-visible outline fires on the bare input inside it
+   too, and a sharp rectangle appears within the pill. The ring is moved, not
+   removed — see .search-capsule:focus-within in the component. */
+.search-capsule input:focus-visible { outline: none; }
 .dot-datepicker .react-datepicker__header {
   background: #fcfdfe;
   border-bottom: 1px solid #eef1f6;

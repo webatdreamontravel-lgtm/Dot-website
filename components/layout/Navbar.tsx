@@ -119,7 +119,10 @@ export function Navbar({ variant = "transparent" }: NavbarProps) {
                   <Link
                     href={l.href}
                     onClick={() => setOpen(false)}
-                    className="block py-3 font-display text-2xl text-navy"
+                    // 24px in the display serif read as five headings stacked. 18px
+                    // keeps the row at a 48px touch target and still has
+                    // presence in Fraunces.
+                    className="block py-3 font-display text-lg text-navy"
                   >
                     {l.label}
                   </Link>

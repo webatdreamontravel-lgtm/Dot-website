@@ -44,13 +44,13 @@ export default function AboutPage() {
       <main className="bg-cream pt-32 md:pt-40">
         <section className="mx-auto max-w-5xl px-6 md:px-8 pb-24">
           <p className="font-script text-2xl text-teal">A small story →</p>
-          <AnimatedHeading as="h1" className="mt-2 text-5xl md:text-8xl">
+          <AnimatedHeading as="h1" className="mt-2 text-4xl md:text-8xl">
             We started in <span className="italic text-coral">2023.</span>
             <br />
             With one bus and a lot of <span className="italic text-teal">faith.</span>
           </AnimatedHeading>
 
-          <div className="mt-10 grid md:grid-cols-2 gap-8 text-lg text-navy/75 leading-relaxed">
+          <div className="mt-10 grid md:grid-cols-2 gap-8 text-base text-navy/75 leading-relaxed md:text-lg">
             <p>
               Dream On Travel began as a half-serious WhatsApp idea between two friends who kept missing each other on solo trips. The first trip — Wayanad, twelve travelers, mostly strangers — felt less like a tour and more like a college reunion. People asked when the next one was before the bus had even reached home.
             </p>
@@ -66,7 +66,7 @@ export default function AboutPage() {
             <dl className="grid grid-cols-2 md:grid-cols-4 gap-6">
               {stats.map((s) => (
                 <div key={s.label} className="text-center md:text-left">
-                  <dd className="font-display text-5xl md:text-7xl tracking-tight">{s.value}</dd>
+                  <dd className="font-display text-4xl md:text-7xl tracking-tight">{s.value}</dd>
                   <dt className="mt-1 text-sm uppercase tracking-[0.18em] text-navy/60">{s.label}</dt>
                 </div>
               ))}
@@ -77,7 +77,7 @@ export default function AboutPage() {
         {/* Values */}
         <section className="py-24 md:py-28">
           <div className="mx-auto max-w-7xl px-6 md:px-8">
-            <AnimatedHeading className="text-5xl md:text-7xl mb-12">
+            <AnimatedHeading className="text-4xl md:text-7xl mb-12">
               What we <span className="italic text-teal">care about</span>
             </AnimatedHeading>
             <div className="grid md:grid-cols-2 gap-5">
@@ -86,7 +86,7 @@ export default function AboutPage() {
                   key={v.title}
                   className="rounded-3xl border border-navy/10 bg-cream-soft p-7 md:p-9"
                 >
-                  <p className="font-display text-6xl text-navy/15">0{i + 1}</p>
+                  <p className="font-display text-4xl text-navy/15">0{i + 1}</p>
                   <h3 className="mt-2 font-display text-2xl md:text-3xl">{v.title}</h3>
                   <p className="mt-2 text-navy/70 leading-relaxed">{v.body}</p>
                 </div>
@@ -101,7 +101,7 @@ export default function AboutPage() {
           <div className="grain opacity-[0.05]" aria-hidden />
           <div className="relative mx-auto max-w-7xl px-6 md:px-8">
             <p className="font-script text-2xl text-yellow">The DOT crew</p>
-            <AnimatedHeading className="mt-1 text-5xl md:text-7xl mb-12">
+            <AnimatedHeading className="mt-1 text-4xl md:text-7xl mb-12">
               Built by people who <span className="italic text-yellow">travel a lot.</span>
             </AnimatedHeading>
             <div className="grid md:grid-cols-3 gap-6">
@@ -130,10 +130,10 @@ export default function AboutPage() {
         {/* CTA */}
         <section className="py-24 md:py-28 text-center">
           <div className="mx-auto max-w-2xl px-6 md:px-8">
-            <AnimatedHeading className="text-5xl md:text-6xl">
+            <AnimatedHeading className="text-4xl md:text-6xl">
               Come <span className="italic text-coral">somewhere</span> with us.
             </AnimatedHeading>
-            <p className="mt-5 text-navy/70 text-lg">
+            <p className="mt-5 text-navy/70 text-base md:text-lg">
               The next trip is always closer than you think.
             </p>
             <div className="mt-8 flex justify-center gap-3">

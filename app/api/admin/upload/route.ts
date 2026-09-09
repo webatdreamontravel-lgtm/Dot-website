@@ -10,8 +10,14 @@ import {
 } from "@/lib/imageConfig";
 import { buildKey, publicUrlFor, putImage } from "@/lib/s3";
 
-/** What a person is allowed to pick. */
-const ALLOWED_INPUT = new Set(["image/jpeg", "image/png"]);
+/**
+ * What may arrive as the declared original type.
+ *
+ * WebP is in the list because a photo for a fixed-shape slot is cropped and
+ * re-encoded in the browser before it is sent, so the "original" the client
+ * reports is the cropper's output, not the JPEG off the camera roll.
+ */
+const ALLOWED_INPUT = new Set(["image/jpeg", "image/png", "image/webp"]);
 /** What may land in storage — WebP because we convert before uploading. */
 const ALLOWED_STORED = new Set(["image/jpeg", "image/png", "image/webp"]);
 

@@ -6,6 +6,7 @@
 
 import imageCompression from "browser-image-compression";
 
+import { slotFor } from "@/lib/imageSlots";
 import {
   formatMb,
   MAX_STORED_BYTES,
@@ -16,25 +17,41 @@ import {
 
 export type UploadResult = { url: string; key: string } | { error: string };
 
-/** What a person is allowed to pick. Deliberately narrow. */
+/** What a person is allowed to PICK. Deliberately narrow. */
 export const ACCEPTED_INPUT = ["image/jpeg", "image/png"] as const;
+
+/**
+ * What may reach the upload, which is a wider set.
+ *
+ * A photo bound for a fixed-shape slot comes back from the cropper already
+ * encoded as WebP at the slot's exact size, so by the time it gets here it
+ * is no longer the JPEG or PNG that was picked. The pick list above is what
+ * the file input and the picker check against; this is what the network
+ * call accepts.
+ */
+const UPLOADABLE = new Set<string>([...ACCEPTED_INPUT, "image/webp"]);
 export const ACCEPT_ATTRIBUTE = "image/jpeg,image/png,.jpg,.jpeg,.png";
 
 export { MAX_UPLOAD_MB, MAX_STORED_MB };
 
-const MAX_EDGE: Record<string, number> = {
-  hero: 2560,
-  card: 1600,
-  inline: 1800,
-};
+/** Only for slots with no fixed shape — rich-text images, in practice. */
+const FREEFORM_MAX_EDGE = 1800;
 
-function maxEdgeFor(slot: string): number {
-  if (slot.startsWith("day-")) return 1800;
-  return MAX_EDGE[slot] ?? 1800;
+/**
+ * The longest edge to compress towards.
+ *
+ * A shaped slot answers this itself: the cropper has already produced
+ * exactly slot.width x slot.height, so the cap is the slot's own long edge
+ * and compression only re-encodes rather than resizing again. Everything
+ * else falls back to one number.
+ */
+function maxEdgeFor(target: string): number {
+  const slot = slotFor(target);
+  return slot ? Math.max(slot.width, slot.height) : FREEFORM_MAX_EDGE;
 }
 
 export async function uploadImage(file: File, slot: string): Promise<UploadResult> {
-  if (!ACCEPTED_INPUT.includes(file.type as (typeof ACCEPTED_INPUT)[number])) {
+  if (!UPLOADABLE.has(file.type)) {
     return { error: "Only JPG and PNG photos can be uploaded." };
   }
 

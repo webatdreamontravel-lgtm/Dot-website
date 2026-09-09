@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertCircle, ArrowLeft, CheckCircle2, ExternalLink, Eye, Loader2 } from "lucide-react";
 
 import { ImageUpload } from "@/components/admin/ImageUpload";
+import { IMAGE_SLOTS } from "@/lib/imageSlots";
 import { ItineraryEditor } from "@/components/admin/ItineraryEditor";
 import { MoodboardEditor } from "@/components/admin/MoodboardEditor";
 import { ReviewsEditor, type ReviewDraft } from "@/components/admin/ReviewsEditor";
@@ -43,6 +44,7 @@ export type TripFormValues = {
   autoCloseWhenFull?: boolean;
   showSeatsLeft?: boolean;
   status?: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  showOnHomepage?: boolean;
   isFeatured?: boolean;
   introduction?: unknown;
   itinerary?: unknown;
@@ -278,7 +280,7 @@ export function TripForm({
             slot="card"
             label="Card photo"
             hint="Portrait. Used on the homepage grid."
-            aspect="5 / 6"
+            aspect={IMAGE_SLOTS.card.css}
             defaultValue={values.cardImage}
           />
           <ImageUpload
@@ -286,7 +288,7 @@ export function TripForm({
             slot="hero"
             label="Hero photo"
             hint="Wide. The banner across the top of the trip page."
-            aspect="16 / 9"
+            aspect={IMAGE_SLOTS.hero.css}
             defaultValue={values.heroImage}
           />
         </div>
@@ -357,10 +359,16 @@ export function TripForm({
             body="Displays “only 3 seats left” on the card and trip page."
           />
           <Toggle
+            name="showOnHomepage"
+            defaultChecked={values.showOnHomepage ?? true}
+            title="Show on the homepage"
+            body="Puts this trip in the homepage rail. Off keeps it fully live — listed, searchable and bookable on the trips page — just not on the front page."
+          />
+          <Toggle
             name="isFeatured"
             defaultChecked={values.isFeatured ?? false}
             title="Show as the big card"
-            body="Every published trip already appears on the homepage. This only makes one of them span the grid as a large highlight — turning it off doesn't hide the trip."
+            body="Makes this the one trip that spans the grid as a large highlight. Only one trip can hold it, so saving this live takes it off whichever trip has it now. It switches on “Show on the homepage” with it."
           />
 
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-[#eef1f6] pt-4">
@@ -368,7 +376,7 @@ export function TripForm({
               <b className="block text-[0.89rem] font-semibold">Status</b>
               <small className="mt-0.5 block text-[0.8rem] text-[#8b96ad]">
                 Where this trip is in its life. Drafts are invisible; publishing puts it on the
-                homepage and makes it bookable. To take a live trip off the site, use the Active
+                on the trips page and makes it bookable. To take a live trip off the site, use the Active
                 switch in the trips list rather than changing it here.
               </small>
             </div>

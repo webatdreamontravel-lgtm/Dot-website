@@ -36,6 +36,19 @@ export type TripCardView = {
   gstPercent: number;
   tcsPercent: number;
   isFeatured: boolean;
+  /**
+   * The trip has already run.
+   *
+   * Decided here, once, against one clock — not in each component from
+   * `endDate`, which would put a browser clock in charge of whether a
+   * booking button works.
+   *
+   * The listings never return a departed trip, but a trip page reached
+   * straight from a link does: getTripBySlug deliberately has no date filter
+   * so a WhatsApp link shared weeks ago still shows what the trip was,
+   * rather than a 404. That is exactly the case this flag exists for.
+   */
+  departed: boolean;
 };
 
 export type MoodEntry = { label: string; value: number };
@@ -126,6 +139,7 @@ const cardSelect = {
   gstPercent: true,
   tcsPercent: true,
   isFeatured: true,
+  showOnHomepage: true,
 } as const;
 
 type CardRow = {
@@ -154,6 +168,9 @@ function toCardView(t: CardRow, seatsAvailable: number): TripCardView {
     heroImage: t.heroImage,
     startDate: t.startDate.toISOString(),
     endDate: t.endDate.toISOString(),
+    // End of the departure day, not its midnight: a trip finishing today has
+    // not departed until today is over.
+    departed: t.endDate.getTime() + 86_399_999 < Date.now(),
     durationLabel: t.durationLabel,
     ageGroup: t.ageGroup,
     availability: availabilityOf(t.totalSeats, seatsAvailable),
@@ -170,7 +187,18 @@ function toCardView(t: CardRow, seatsAvailable: number): TripCardView {
 }
 
 /** Published, not-yet-departed trips, soonest first. */
-export async function getUpcomingTrips(limit?: number): Promise<TripCardView[]> {
+/**
+ * Every trip open for booking.
+ *
+ * `homepageOnly` narrows it to the rail on the front page. The /trips
+ * listing deliberately does NOT pass it: taking a trip off the homepage is
+ * about what the front page leads with, not about hiding the trip — it stays
+ * listed, searchable and bookable either way.
+ */
+export async function getUpcomingTrips(
+  limit?: number,
+  opts: { homepageOnly?: boolean } = {},
+): Promise<TripCardView[]> {
   const rows = await prisma.trip.findMany({
     where: {
       status: "PUBLISHED",
@@ -179,6 +207,7 @@ export async function getUpcomingTrips(limit?: number): Promise<TripCardView[]> 
       isActive: true,
       deletedAt: null,
       endDate: { gte: new Date() },
+      ...(opts.homepageOnly ? { showOnHomepage: true } : {}),
     },
     orderBy: [{ isFeatured: "desc" }, { startDate: "asc" }],
     take: limit,
@@ -190,7 +219,7 @@ export async function getUpcomingTrips(limit?: number): Promise<TripCardView[]> 
 }
 
 export async function getFeaturedTrip(): Promise<TripCardView | null> {
-  const all = await getUpcomingTrips();
+  const all = await getUpcomingTrips(undefined, { homepageOnly: true });
   return all.find((t) => t.availability !== "SOLD_OUT") ?? all[0] ?? null;
 }
 

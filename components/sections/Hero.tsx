@@ -60,7 +60,11 @@ export function Hero() {
           <h1
             className="mt-8 md:mt-10 text-center font-display font-medium tracking-tight"
             style={{
-              fontSize: "clamp(2.75rem, 8.5vw, 7.25rem)",
+              // Floor lowered from 2.75rem: at 375px the clamp pinned the hero to
+              // 44px, above even the largest system text style on either mobile
+              // platform, and "Strangers to Friends." filled the screen. The vw
+              // term and the desktop ceiling are untouched.
+              fontSize: "clamp(2.25rem, 8.5vw, 7.25rem)",
               lineHeight: 0.92,
               letterSpacing: "-0.02em",
             }}

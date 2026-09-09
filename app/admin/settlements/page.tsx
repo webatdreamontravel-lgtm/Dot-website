@@ -12,7 +12,7 @@ import {
 } from "@/lib/queries/settlements";
 import { formatINR } from "@/lib/utils";
 import { Chip, EmptyState, Panel } from "../ui";
-import { DateRangeField } from "@/components/admin/DateRangeField";
+import { DateRangeField } from "@/components/shared/DateRangeField";
 import { FilterBar } from "../FilterBar";
 import { SettlementPager } from "./SettlementPager";
 

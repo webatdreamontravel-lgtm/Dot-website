@@ -54,7 +54,7 @@ export function HowItWorks() {
           <p className="font-script text-2xl text-yellow">How it works</p>
           <h2
             id="how-it-works-heading"
-            className="mt-2 font-display text-4xl tracking-tight md:text-6xl"
+            className="mt-2 font-display text-3xl tracking-tight md:text-6xl"
             style={{ lineHeight: 1.02 }}
           >
             Booking a seat, <span className="italic text-yellow">start to finish</span>
@@ -75,7 +75,7 @@ export function HowItWorks() {
                 </span>
                 <span
                   aria-hidden
-                  className="font-display text-4xl leading-none text-cream/15"
+                  className="font-display text-3xl leading-none text-cream/15"
                 >
                   {String(i + 1).padStart(2, "0")}
                 </span>

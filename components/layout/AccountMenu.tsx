@@ -90,7 +90,7 @@ export function AccountMenuMobile() {
   return (
     <Link
       href={signedIn ? "/account" : `/login?next=${encodeURIComponent(pathname)}`}
-      className="flex items-center gap-2.5 py-3 font-display text-2xl text-navy"
+      className="flex items-center gap-2.5 py-3 font-display text-lg text-navy"
     >
       <CircleUser className="h-5 w-5 text-navy/50" />
       {signedIn ? "My trips" : "Sign in"}
