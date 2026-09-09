@@ -32,6 +32,14 @@ type Traveller = {
   phone: string | null;
   email: string | null;
   cancelledAt: Date | string | null;
+  /**
+   * Collected at checkout, stored on the lead traveller, and until now shown
+   * only to the customer on their own booking page — never on this screen.
+   * The one moment it is needed is the one moment the customer can't be
+   * reached, and this is where the team looks.
+   */
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
 };
 
 const METHODS = [
@@ -49,7 +57,24 @@ const SOURCES = [
   { value: "FESTIVAL", label: "Festival" },
 ];
 
-const STATUSES = Object.entries(BOOKING_TONE).map(([value, v]) => ({ value, label: v.label }));
+/**
+ * What an admin may set by hand.
+ *
+ * EXPIRED is left out: it is something that HAPPENS to a booking, not
+ * something anyone decides. The release-holds cron sets it when a checkout
+ * is abandoned, and createOrder sets it on the old booking when a customer
+ * restarts — both automatic, both meaning "this never became a booking".
+ * Picking it by hand would claim a customer walked away when they didn't.
+ *
+ * No need to keep it for a booking that already IS expired: statusOpen()
+ * refuses every closed status, so that panel renders read-only and this
+ * select never appears on one. The filter dropdowns are built from
+ * BOOKING_TONE directly and still offer it — you filter by what is stored.
+ */
+const SETTABLE_BY_HAND = new Set(["EXPIRED"]);
+const STATUSES = Object.entries(BOOKING_TONE)
+  .filter(([value]) => !SETTABLE_BY_HAND.has(value))
+  .map(([value, v]) => ({ value, label: v.label }));
 
 /** Shared plumbing: run an action, surface its error, refresh on success. */
 function useAction() {
@@ -73,13 +98,38 @@ function useAction() {
   return { run, pending, error, setError };
 }
 
+/**
+ * The booking belongs to whoever is paying for it, for the next few minutes.
+ *
+ * Shown instead of the form rather than beside it: a disabled amount box on
+ * a screen whose whole job is taking money invites typing into it and
+ * wondering why nothing happens.
+ */
+function InCheckout({ minsLeft, what }: { minsLeft: number; what: string }) {
+  return (
+    <p
+      role="alert"
+      className="mt-3 rounded-lg border border-[#cfe3ef] bg-[#eaf4f9] px-3.5 py-3 text-[0.83rem] leading-relaxed text-[#1d5f7a]"
+    >
+      <strong>Someone is paying for this booking right now.</strong> Their seats are held for
+      another {minsLeft} minute{minsLeft === 1 ? "" : "s"} — {what} until the payment lands,
+      or the hold lapses on its own.
+    </p>
+  );
+}
+
 export function PaymentPanel({
   bookingId,
   balancePaise,
   customerName,
   creditPaise = 0,
+  inCheckout = false,
+  checkoutMinsLeft = 0,
 }: {
   bookingId: string;
+  /** A customer is mid-Razorpay on this booking. See checkoutInFlight(). */
+  inCheckout?: boolean;
+  checkoutMinsLeft?: number;
   balancePaise: number;
   customerName: string;
   /** What this customer is holding in travel credit, across all bookings. */
@@ -154,6 +204,16 @@ export function PaymentPanel({
    * money genuinely taken beyond the total is a repricing or a mistake, both
    * of which want a person thinking rather than a quick entry here.
    */
+  if (inCheckout) {
+    return (
+      <Panel title="Record a payment">
+        <div className="px-5 pb-5">
+          <InCheckout minsLeft={checkoutMinsLeft} what="nothing can be recorded" />
+        </div>
+      </Panel>
+    );
+  }
+
   if (balancePaise <= 0) {
     return (
       <Panel title="Record a payment">
@@ -322,6 +382,8 @@ const STATUS_EMAIL: Record<string, string> = {
 };
 
 export function StatusPanel({
+  inCheckout = false,
+  checkoutMinsLeft = 0,
   bookingId,
   reference,
   status,
@@ -332,6 +394,9 @@ export function StatusPanel({
   refundedPaise,
   pendingRefundPaise = 0,
 }: {
+  /** A customer is mid-Razorpay on this booking. See checkoutInFlight(). */
+  inCheckout?: boolean;
+  checkoutMinsLeft?: number;
   bookingId: string;
   reference: string;
   status: string;
@@ -409,6 +474,16 @@ export function StatusPanel({
    * refuses this too — see lib/booking/lifecycle.ts — and this panel exists
    * so nobody reaches that error by clicking a control that looked live.
    */
+  if (inCheckout) {
+    return (
+      <Panel title="Status">
+        <div className="px-5 pb-5">
+          <InCheckout minsLeft={checkoutMinsLeft} what="the status can't be changed" />
+        </div>
+      </Panel>
+    );
+  }
+
   if (!statusOpen(status)) {
     const tone = BOOKING_TONE[status];
     return (
@@ -662,12 +737,16 @@ export function StatusPanel({
 export function DetailsPanel({
   bookingId,
   source,
+  customerNotes,
   internalNotes,
   travellers,
   canRemoveSeat,
 }: {
   bookingId: string;
   source: string;
+  /** What the customer wrote at checkout. Never editable here. */
+  customerNotes: string | null;
+  /** The team's own, plus warnings the system stamps on a booking. */
   internalNotes: string | null;
   travellers: Traveller[];
   canRemoveSeat: boolean;
@@ -676,6 +755,7 @@ export function DetailsPanel({
   const [editing, setEditing] = useState(false);
   const [src, setSrc] = useState(source);
   const [notes, setNotes] = useState(internalNotes ?? "");
+  const [custNotes, setCustNotes] = useState(customerNotes ?? "");
   const [rows, setRows] = useState(travellers);
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
@@ -701,6 +781,23 @@ export function DetailsPanel({
   // and records a reason. Offering it here would just fail.
   const canCancelSeats = canRemoveSeat && activeCount > 1;
 
+  // Taken from whichever traveller carries it. Checkout stores it on the
+  // lead, but reading across the party means an imported or hand-edited
+  // booking that put it elsewhere still shows it.
+  const emergency =
+    rows
+      .map((t) => [t.emergencyContactName, t.emergencyContactPhone].filter(Boolean).join(" · "))
+      .find(Boolean) ?? "";
+
+  // Held as one pair for the whole party, matching how it is asked for and
+  // how it is stored — on the lead traveller, cleared from the rest.
+  const [emName, setEmName] = useState(
+    travellers.map((t) => t.emergencyContactName).find(Boolean) ?? "",
+  );
+  const [emPhone, setEmPhone] = useState(
+    travellers.map((t) => t.emergencyContactPhone).find(Boolean) ?? "",
+  );
+
   const patch = (id: string, changes: Partial<Traveller>) =>
     setRows((prev) => prev.map((t) => (t.id === id ? { ...t, ...changes } : t)));
 
@@ -711,6 +808,9 @@ export function DetailsPanel({
           bookingId,
           source: src as "WEB",
           internalNotes: notes,
+          customerNotes: custNotes,
+          emergencyContactName: emName,
+          emergencyContactPhone: emPhone,
           travellers: rows.map((t) => ({
             id: t.id,
             fullName: t.fullName,
@@ -733,6 +833,9 @@ export function DetailsPanel({
               setRows(travellers);
               setSrc(source);
               setNotes(internalNotes ?? "");
+              setCustNotes(customerNotes ?? "");
+              setEmName(travellers.map((t) => t.emergencyContactName).find(Boolean) ?? "");
+              setEmPhone(travellers.map((t) => t.emergencyContactPhone).find(Boolean) ?? "");
             }}
             className="inline-flex items-center gap-1 text-[0.82rem] text-[#5a6785] hover:text-navy"
           >
@@ -829,12 +932,38 @@ export function DetailsPanel({
                   <p className="text-[0.8rem] text-[#8b96ad]">
                     {[t.phone, t.email].filter(Boolean).join(" · ") || "no contact"}
                   </p>
+
                 </>
               )}
             </li>
             );
           })}
         </ul>
+
+        {/* One contact for the whole party, which is how checkout asks for it
+            — "someone not travelling with you, one for the whole group is
+            fine". It is stored on the lead traveller only, so showing it
+            inside their card made it look like Ajay's contact rather than
+            the booking's. Always shown, even when empty: 38 of 39 web
+            bookings skip the field, and a blank that renders nothing looks
+            exactly like a field nobody ever asked for. */}
+        <div className="mt-4 border-t border-[#eef1f6] pt-3.5">
+          <p className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#b26a00]">
+            In an emergency
+          </p>
+          {editing ? (
+            <div className="mt-1.5 grid gap-2.5 sm:grid-cols-2">
+              <Input value={emName} onChange={setEmName} placeholder="Name" />
+              <PhoneInput value={emPhone} onChange={setEmPhone} className={controlClass} />
+            </div>
+          ) : emergency ? (
+            <p className="mt-1 text-[0.88rem] text-[#16203a]">{emergency}</p>
+          ) : (
+            <p className="mt-1 text-[0.85rem] text-[#a8b0c0]">
+              Not given — worth asking for
+            </p>
+          )}
+        </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Field label="Source">
@@ -846,13 +975,40 @@ export function DetailsPanel({
           </Field>
         </div>
 
+        {/* Editable now that it has its own column — it was read-only only
+            while the team's box wrote to the same field and would have wiped
+            it. Kept visually separate so it stays obvious whose words these
+            are: an admin recording "she asked for a lower berth" is speaking
+            for the customer, not making a note to the team. */}
+        {(editing || customerNotes) && (
+          <div className="mt-3 rounded-lg border border-[#d7e8e2] bg-[#f2f9f6] px-3.5 py-3">
+            <p className="text-[0.72rem] font-semibold uppercase tracking-[0.1em] text-[#0f7a55]">
+              Customer notes
+            </p>
+            {editing ? (
+              <textarea
+                value={custNotes}
+                onChange={(e) => setCustNotes(e.target.value)}
+                rows={2}
+                placeholder="What the customer asked for. They can see this."
+                className="mt-1.5 w-full rounded-lg border border-[#c5ddd5] bg-white px-3 py-2 text-[0.86rem] outline-none focus:border-teal"
+              />
+            ) : (
+              <p className="mt-1 whitespace-pre-line text-[0.86rem] leading-relaxed text-[#16203a]">
+                {customerNotes}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="mt-3">
-          <Field label="Internal notes">
+          <Field label="Admin notes">
             {editing ? (
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
+                placeholder="For the team. The customer never sees this."
                 className="w-full rounded-lg border border-[#e3e7ee] bg-white px-3 py-2 text-[0.86rem] outline-none focus:border-teal"
               />
             ) : (
@@ -1088,7 +1244,8 @@ export function RefundPanel({
           {confirming ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#f0dcae] bg-[#fdf6e3] px-3 py-2.5">
               <span className="text-[0.83rem] text-[#7a4a00]">
-                Send {formatINR(entered)} back? This can&apos;t be undone here.
+                Send {formatINR(entered)}{" "}
+                back? This can&apos;t be undone here.
               </span>
               <button
                 type="button"

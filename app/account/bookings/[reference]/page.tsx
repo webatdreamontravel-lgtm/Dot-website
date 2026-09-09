@@ -7,6 +7,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { requireUser } from "@/lib/auth";
 import { toRupees } from "@/lib/booking/pricing";
+import { amountOutstanding } from "@/lib/booking/balance";
 import { getBookingForCustomer } from "@/lib/queries/booking";
 import { canPayBalanceOnline, customerStatus, REFUND_NOTICE } from "@/lib/booking/customerStatus";
 import { siteConfig } from "@/lib/data/siteConfig";
@@ -61,9 +62,18 @@ export default async function BookingDetailPage({ params, searchParams }: Params
   const booking = await getBookingForCustomer(reference, profile.id);
   if (!booking) notFound();
 
-  const status = customerStatus(booking);
+  /**
+   * What left this booking for their travel credit.
+   *
+   * Read from the ledger entries the booking created, never inferred from
+   * `paid − refunded`: a cancellation charge or a goodwill top-up makes
+   * those two different numbers, and the subtraction stops reconstructing
+   * the decision the moment another refund lands.
+   */
+  const carriedForwardPaise = booking.creditIssued.reduce((n, c) => n + c.amountPaise, 0);
+  const status = customerStatus({ ...booking, creditIssuedPaise: carriedForwardPaise });
   const advanceDuePaise = (booking.trip.advancePaise ?? 0) * booking.seats;
-  const balancePaise = booking.totalPaise - booking.amountPaidPaise;
+  const balancePaise = amountOutstanding(booking);
 
   const canPayBalance = canPayBalanceOnline(booking);
 
@@ -340,6 +350,18 @@ export default async function BookingDetailPage({ params, searchParams }: Params
                   <Line
                     label={showRefundSplit ? "Refunded in total" : "Refunded to you"}
                     value={`− ${formatINR(toRupees(booking.refundedPaise))}`}
+                  />
+                )}
+
+                {/* Not a refund — no money went back to them — so it gets its
+                    own line rather than joining the block above. Without it
+                    the page showed "You paid ₹29,398" and then nothing, and
+                    the customer had no way to see where it went. */}
+                {carriedForwardPaise > 0 && (
+                  <Line
+                    label="Kept as travel credit"
+                    value={`− ${formatINR(toRupees(carriedForwardPaise))}`}
+                    hint="Yours to spend on a future trip. It doesn't expire."
                   />
                 )}
 

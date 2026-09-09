@@ -294,6 +294,66 @@ const TRIPS: Seed[] = [
       { label: "Adventure", value: 1 },
     ],
   },
+  {
+    slug: "kodaikanal-clean-run-test",
+    title: "Kodaikanal Clean Run (TEST)",
+    batchName: "TEST · ₹10,500 a seat · advance ₹4,500",
+    tagline: "Small, round numbers and a full tax line — the one to walk a whole booking through on",
+    destination: "Kodaikanal, Palani Hills",
+    category: "TEST",
+    // 60 days: past the 21- and 14-day reminder offsets and well clear of the
+    // final-five daily window, so the nightly cron never moves anything while
+    // you are mid-test. Age the trip deliberately when reminders are the point.
+    startsInDays: 60,
+    nights: 2,
+    durationLabel: "3 Days, 2 Nights",
+    // Twelve: four bookings of three fills it exactly, so sold-out is
+    // reachable on purpose rather than by running out by accident.
+    totalSeats: 12,
+    /**
+     * ₹10,000 + 5% GST = ₹10,500 a seat, and it stays exact.
+     *
+     * The base is a multiple of ₹20 deliberately. GST is rounded to whole
+     * rupees once over the whole subtotal, so 5% of any multiple of ₹20 is
+     * already a whole number and nothing is left over — two seats is ₹21,000,
+     * seven is ₹73,500, twelve is ₹1,26,000. Any figure that is not a whole
+     * multiple of ₹10,500 is a real discrepancy, never rounding.
+     *
+     * Valparai carries no tax so its totals are round; this one keeps the 5%
+     * line visible, which is what a real invoice shows.
+     */
+    pricePaise: 1_000_000,
+    advancePaise: 450_000,
+    heroImage: img("photo-1501785888041-af3ef285b470", 1920),
+    cardImage: img("photo-1476514525535-07fb3b4ae5f1", 1200),
+    intro: [
+      "A test departure sized for a full walk-through. ₹10,500 a seat with the GST line intact, ₹4,500 due now and ₹6,000 before departure — small enough to hold in your head, and split unevenly on purpose so a half-paid booking never looks like a rounding artefact.",
+      "Twelve seats and a two-month runway: room to run every payment path more than once, reach sold-out when you mean to, and never have a reminder cron change the state underneath you.",
+    ],
+    itinerary: [
+      { title: "One booking, end to end", body: "Four bookings of three seats fills it exactly. That is what makes sold-out, the last-seat race and late authorisation reachable deliberately rather than by accident." },
+    ],
+    inclusions: [
+      h("What this trip is for"),
+      ul([
+        "A whole booking from checkout to settlement, with tax on the invoice",
+        "Advance now, balance later — online and recorded by hand",
+        "Refunds, travel credit and the status locks around them",
+        "Filling the last seat on purpose",
+      ]),
+    ],
+    exclusions: ["An actual trip to Kodaikanal"],
+    thingsToKnow: [
+      "₹10,000 per seat + 5% GST = ₹10,500. Advance ₹4,500 per seat, balance ₹6,000.",
+      "Twelve seats. Every party size lands on a whole multiple of ₹10,500.",
+      "Departs in about two months — clear of the 21-day, 14-day and final-five reminder windows.",
+    ],
+    moodboard: [
+      { label: "Leisure", value: 1 },
+      { label: "Nature", value: 1 },
+      { label: "Adventure", value: 1 },
+    ],
+  },
 ];
 
 async function main() {

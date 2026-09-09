@@ -4,6 +4,7 @@ import { endOfDay, parseDateFilter } from "@/lib/dates";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { statusSettled } from "@/lib/booking/lifecycle";
+import { paymentStateOf } from "@/lib/booking/paymentState";
 
 /**
  * Admin read models.
@@ -274,8 +275,6 @@ export type BookingTotals = {
   count: number;
   /** Seats actually held — cancelled and expired bookings excluded. */
   seats: number;
-  /** Seats given up: whole cancelled bookings, plus individually cancelled travellers. */
-  cancelledSeats: number;
   totalPaise: number;
   /** Every rupee taken in, including on bookings later cancelled. */
   collectedPaise: number;
@@ -292,6 +291,21 @@ export type BookingTotals = {
    * is held deliberately.
    */
   toRefundPaise: number;
+  /**
+   * Held, split by whether the seat is actually going.
+   *
+   *   liveHeld   money for people on this trip. The figure that should
+   *              match the seats sold.
+   *   retained   money still on bookings that are NOT going — a cancellation
+   *              charge kept on purpose, or something nobody has settled yet.
+   *
+   * One card conflated them, so a trip whose only remaining money was a
+   * ₹1,999 cancellation charge reported it as trip income.
+   */
+  liveHeldPaise: number;
+  retainedPaise: number;
+  /** Moved to customers' credit ledgers. Ours to deliver, not ours to keep. */
+  creditIssuedPaise: number;
   /** Already returned. */
   refundedPaise: number;
   /**
@@ -372,7 +386,7 @@ function bookingWhere(filters: BookingFilters, tripId?: string): Prisma.BookingW
 const DEAD_STATUSES = ["CANCELLED", "EXPIRED"] as const;
 
 async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTotals> {
-  const [agg, live, deadSeats, cancelledTravellers, dead, liveRows] = await Promise.all([
+  const [agg, live, dead, liveRows, allRows] = await Promise.all([
     prisma.booking.aggregate({
       where,
       _count: { _all: true },
@@ -384,19 +398,6 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
     prisma.booking.aggregate({
       where: { AND: [where, { status: { notIn: [...DEAD_STATUSES] } }] },
       _sum: { seats: true },
-    }),
-    prisma.booking.aggregate({
-      where: { AND: [where, { status: { in: [...DEAD_STATUSES] } }] },
-      _sum: { seats: true },
-    }),
-    // Seats given up one at a time, on bookings that are otherwise alive.
-    // Counted separately from whole cancelled bookings so neither is
-    // double-counted.
-    prisma.bookingTraveller.count({
-      where: {
-        cancelledAt: { not: null },
-        booking: { AND: [where, { status: { notIn: [...DEAD_STATUSES] } }] },
-      },
     }),
     // Money sitting on bookings that are no longer going anywhere. REFUNDED
     // and PARTIALLY_REFUNDED are excluded: both are settled outcomes, so
@@ -418,7 +419,33 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
       where: { AND: [where, { status: { in: ["REQUESTED", "CONFIRMED"] } }] },
       select: { totalPaise: true, amountPaidPaise: true, refundedPaise: true },
     }),
+    /**
+     * Every booking, with the credit each one sent to a ledger.
+     *
+     * `netHeld` used to be collected − refunded, which counts carried-forward
+     * money as still held: a trip where every booking was carried forward
+     * reported ₹13,004 held while holding nothing at all. Credit belongs to
+     * the customer the moment it is issued.
+     */
+    prisma.booking.findMany({
+      where,
+      select: {
+        status: true, amountPaidPaise: true, refundedPaise: true,
+        creditIssued: { select: { amountPaise: true } },
+      },
+    }),
   ]);
+
+  let liveHeldPaise = 0;
+  let retainedPaise = 0;
+  let creditIssuedPaise = 0;
+  for (const b of allRows) {
+    const credit = b.creditIssued.reduce((n, c) => n + c.amountPaise, 0);
+    creditIssuedPaise += credit;
+    const held = b.amountPaidPaise - b.refundedPaise - credit;
+    if (statusSettled(b.status)) retainedPaise += held;
+    else liveHeldPaise += held;
+  }
 
   const totalPaise = agg._sum.totalPaise ?? 0;
   const collectedPaise = agg._sum.amountPaidPaise ?? 0;
@@ -450,14 +477,17 @@ async function bookingTotals(where: Prisma.BookingWhereInput): Promise<BookingTo
   return {
     count: agg._count._all,
     seats: live._sum.seats ?? 0,
-    cancelledSeats: (deadSeats._sum.seats ?? 0) + cancelledTravellers,
     totalPaise,
     collectedPaise,
     outstandingPaise,
     // Never negative: over-refunding is a data error, not a debt the
     // customer owes back.
     toRefundPaise: Math.max(deadCollected - deadRefunded, 0) + overpaidPaise,
-    netHeldPaise: collectedPaise - refundedPaise,
+    liveHeldPaise,
+    retainedPaise,
+    creditIssuedPaise,
+    // The two halves, and nothing else — so the cards always add up to it.
+    netHeldPaise: liveHeldPaise + retainedPaise,
     refundedPaise,
   };
 }
@@ -482,6 +512,7 @@ function withPaymentState<
     amountPaidPaise: number;
     refundedPaise: number;
     creditIssued?: { amountPaise: number }[];
+    refunds?: { amountPaise: number }[];
   },
 >(b: T) {
   // Money that left this booking for the customer's credit ledger. It belongs
@@ -510,8 +541,12 @@ function withPaymentState<
     // out in the Held column, and a second label saying the same thing adds
     // noise without adding a fact. The figure that needs acting on lives in
     // the Balance column and on the booking itself.
-    paymentState:
-      b.amountPaidPaise === 0 ? "UNPAID" : balance <= 0 ? "PAID" : "PARTIAL",
+    //
+    // Measured against what was PAID, never against `balance` — see
+    // paymentStateOf() for the two ways that got it wrong.
+    paymentState: paymentStateOf({ ...b, netHeldPaise: netHeld }),
+    /** Asked of Razorpay, not yet confirmed. Zero on screens that don't fetch it. */
+    pendingRefundPaise: (b.refunds ?? []).reduce((n, r) => n + r.amountPaise, 0),
   };
 }
 
@@ -528,9 +563,14 @@ export async function getAdminBookings(filters: BookingFilters, perPage = PER_PA
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
+      // Money already asked of Razorpay and not yet confirmed. Surfaced on
+      // the row because it is otherwise invisible until someone opens the
+      // booking — and it is exactly the state where doing anything else
+      // with that money goes wrong.
+      refunds: { where: { status: "PENDING" }, select: { amountPaise: true } },
       trip: { select: { title: true, slug: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
       // Lead traveller doubles as the fallback name: profiles created by a
@@ -584,7 +624,7 @@ export async function getBookingsForTrip(
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
       profile: { select: { fullName: true, email: true, phone: true } },
@@ -604,16 +644,117 @@ export async function getBookingsForTrip(
   };
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Refunds — every one, across every trip
+   ──────────────────────────────────────────────────────────────────────── */
+
+export type RefundFilters = { q?: string; status?: string; method?: string; page?: string };
+
+export type AdminRefundRow = {
+  id: string;
+  amountPaise: number;
+  status: string;
+  method: string;
+  reason: string | null;
+  razorpayRefundId: string | null;
+  externalReference: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+  processedAt: Date | null;
+  booking: {
+    reference: string;
+    status: string;
+    trip: { title: string };
+    profile: { fullName: string | null; email: string };
+  };
+  initiatedBy: { fullName: string | null; email: string } | null;
+};
+
+/**
+ * A refund raised through Razorpay is the one piece of money in this system
+ * that moves on somebody else's schedule. It can sit PENDING for hours, and
+ * until it resolves it blocks a second refund and a carry-forward on that
+ * booking — but the only place it appeared was inside the booking it belongs
+ * to. A stuck one was invisible unless you already knew to look.
+ *
+ * The screen this feeds is deliberately cross-trip: "what is in flight right
+ * now" and "what failed and nobody noticed" are questions about the business,
+ * not about one booking.
+ */
+export async function getAdminRefunds(
+  filters: RefundFilters = {},
+  perPage = PER_PAGE,
+): Promise<Paged<AdminRefundRow> & { pendingPaise: number; pendingCount: number; failedCount: number }> {
+  const and: Prisma.RefundWhereInput[] = [];
+  if (filters.status) and.push({ status: filters.status as "PENDING" });
+  if (filters.method) and.push({ method: filters.method as "RAZORPAY" });
+  if (filters.q) {
+    const q = filters.q.trim();
+    and.push({
+      OR: [
+        { booking: { reference: { contains: q, mode: "insensitive" } } },
+        { booking: { profile: { fullName: { contains: q, mode: "insensitive" } } } },
+        { booking: { profile: { email: { contains: q, mode: "insensitive" } } } },
+        { razorpayRefundId: { contains: q, mode: "insensitive" } },
+        { externalReference: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
+  const where: Prisma.RefundWhereInput = and.length ? { AND: and } : {};
+
+  const [total, pending, failedCount] = await Promise.all([
+    prisma.refund.count({ where }),
+    // Deliberately unfiltered: money in flight is a fact about the business,
+    // and it must not shrink because someone typed in the search box.
+    prisma.refund.aggregate({ where: { status: "PENDING" }, _sum: { amountPaise: true }, _count: { _all: true } }),
+    prisma.refund.count({ where: { status: "FAILED" } }),
+  ]);
+  const { page, pageCount, skip } = resolvePage(filters.page, total, perPage);
+
+  const rows = await prisma.refund.findMany({
+    where,
+    // Oldest pending first: a refund that has been in flight longest is the
+    // one most likely to have been dropped.
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    skip,
+    take: perPage,
+    select: {
+      id: true, amountPaise: true, status: true, method: true, reason: true,
+      razorpayRefundId: true, externalReference: true, failureReason: true,
+      createdAt: true, processedAt: true,
+      booking: {
+        select: {
+          reference: true, status: true,
+          trip: { select: { title: true } },
+          profile: { select: { fullName: true, email: true } },
+        },
+      },
+      initiatedBy: { select: { fullName: true, email: true } },
+    },
+  });
+
+  return {
+    rows,
+    total,
+    page,
+    perPage,
+    pageCount,
+    pendingPaise: pending._sum.amountPaise ?? 0,
+    pendingCount: pending._count._all,
+    failedCount,
+  };
+}
+
 /** One booking, everything the management screen needs. */
 export async function getAdminBooking(reference: string) {
   return prisma.booking.findUnique({
     where: { reference },
     select: {
-      id: true, reference: true, status: true, source: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, source: true, seats: true,
       unitPricePaise: true, subtotalPaise: true,
       gstPercent: true, gstPaise: true, tcsPercent: true, tcsPaise: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true,
-      internalNotes: true, cancellationReason: true,
+      customerNotes: true, internalNotes: true, cancellationReason: true,
       // Money that left this booking for the customer's credit ledger.
       creditIssued: { select: { amountPaise: true } },
       createdAt: true, confirmedAt: true, cancelledAt: true,
@@ -1084,7 +1225,7 @@ export async function getCustomerBookings(
     skip,
     take: perPage,
     select: {
-      id: true, reference: true, status: true, seats: true,
+      id: true, reference: true, status: true, holdExpiresAt: true, seats: true,
       totalPaise: true, amountPaidPaise: true, refundedPaise: true, createdAt: true,
       creditIssued: { select: { amountPaise: true } },
       trip: { select: { title: true, batchName: true, startDate: true, slug: true } },

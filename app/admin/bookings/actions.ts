@@ -7,8 +7,13 @@ import { requireAdmin } from "@/lib/auth";
 import { recalcForSeats } from "@/lib/booking/pricing";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { amountOutstanding } from "@/lib/booking/balance";
 import { seatsCounted } from "@/lib/booking/seats";
-import { statusOpen } from "@/lib/booking/lifecycle";
+import {
+  checkoutInFlight,
+  checkoutMinutesLeft,
+  statusOpen,
+} from "@/lib/booking/lifecycle";
 import { committedRefundPaise } from "@/lib/booking/refunds";
 import {
   notifyCreditIssued,
@@ -72,6 +77,32 @@ async function audit(
   });
 }
 
+/**
+ * Refuses while a customer is mid-checkout on this booking.
+ *
+ * For the fifteen minutes a hold runs, the booking on screen belongs to
+ * someone with a Razorpay window open. Recording a payment, moving the
+ * status or taking a seat off it races settlement: whichever writes second
+ * wins, and the loser is either money the customer paid or a seat they
+ * thought they had.
+ *
+ * The hold's own expiry is what ends it — no cron, nothing to unstick. Once
+ * it lapses the booking is ordinary again, whether or not anything has run.
+ *
+ * Deliberately not applied to updateBookingDetails: fixing a traveller's
+ * name while they pay corrupts nothing, and is exactly the sort of thing the
+ * team does with the customer on the phone.
+ */
+function assertNotInCheckout(booking: { status: string; holdExpiresAt: Date | null }) {
+  if (!checkoutInFlight(booking)) return;
+  const mins = checkoutMinutesLeft(booking.holdExpiresAt);
+  throw new Error(
+    `SAFE:Someone is paying for this booking right now. Their seats are held for another ` +
+      `${mins} minute${mins === 1 ? "" : "s"} — wait for the payment to land, or for the ` +
+      `hold to lapse.`,
+  );
+}
+
 const money = z
   .string()
   .trim()
@@ -121,11 +152,15 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
         where: { id: data.bookingId },
         select: {
           id: true, reference: true, profileId: true,
-          status: true, totalPaise: true, amountPaidPaise: true,
+          status: true, holdExpiresAt: true, totalPaise: true, amountPaidPaise: true,
+          // Needed to measure what is owed the same way every screen does.
+          refundedPaise: true,
+          creditIssued: { select: { amountPaise: true } },
           trip: { select: { id: true, slug: true } },
         },
       });
       if (!booking) throw new Error("Booking not found.");
+      assertNotInCheckout(booking);
 
       /**
        * Never take more than is owed.
@@ -140,7 +175,24 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
        * A booking that genuinely needs more paid should be repriced first;
        * the balance then exists and this passes.
        */
-      const owedPaise = booking.totalPaise - booking.amountPaidPaise;
+      /**
+       * Measured with amountOutstanding(), the same function the panel, the
+       * customer's page and the pay-balance action all use.
+       *
+       * This was `total - paid`, which ignores refunds — so a booking that
+       * paid ₹10,700 and had ₹5,000 sent back owed ₹5,000 everywhere on
+       * screen and ₹0 here. The form offered "Fill the full balance
+       * (₹5,000)" and the server answered "already paid in full", with no
+       * way through: the money had genuinely gone back and genuinely needed
+       * collecting again.
+       */
+      const owedPaise = amountOutstanding({
+        status: booking.status,
+        totalPaise: booking.totalPaise,
+        amountPaidPaise: booking.amountPaidPaise,
+        refundedPaise: booking.refundedPaise,
+        creditIssuedPaise: booking.creditIssued.reduce((n, c) => n + c.amountPaise, 0),
+      });
       if (owedPaise <= 0) {
         throw new Error("SAFE:This booking is already paid in full.");
       }
@@ -250,9 +302,17 @@ export async function recordPayment(input: z.input<typeof paymentSchema>): Promi
 
 const statusSchema = z.object({
   bookingId: z.string().uuid(),
+  /**
+   * EXPIRED is absent on purpose.
+   *
+   * It is written by the release-holds cron and by createOrder's supersede
+   * path, both directly — neither comes through here. Nobody chooses it, so
+   * accepting it from a form would only ever be a mistake or a forged
+   * request. See SETTABLE_BY_HAND in BookingManager.
+   */
   status: z.enum([
     "PENDING_PAYMENT", "REQUESTED", "CONFIRMED",
-    "CANCELLED", "REFUNDED", "PARTIALLY_REFUNDED", "EXPIRED",
+    "CANCELLED", "REFUNDED", "PARTIALLY_REFUNDED",
   ]),
   reason: z.string().trim().max(300).optional().or(z.literal("")),
 });
@@ -277,9 +337,13 @@ export async function updateBookingStatus(
     const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: bookingId },
-        select: { id: true, status: true, seats: true, trip: { select: { id: true, slug: true } } },
+        select: {
+          id: true, status: true, holdExpiresAt: true, seats: true,
+          trip: { select: { id: true, slug: true } },
+        },
       });
       if (!booking) throw new Error("Booking not found.");
+      assertNotInCheckout(booking);
       /**
        * A closed booking's status is a record of how it ended, not a field.
        *
@@ -363,7 +427,7 @@ export async function cancelSeat(input: z.input<typeof cancelSeatSchema>): Promi
       const booking = await tx.booking.findUnique({
         where: { id: bookingId },
         select: {
-          id: true, status: true, seats: true,
+          id: true, status: true, holdExpiresAt: true, seats: true,
           unitPricePaise: true, gstPercent: true, tcsPercent: true,
           subtotalPaise: true, totalPaise: true, amountPaidPaise: true,
           trip: { select: { id: true, slug: true } },
@@ -371,6 +435,9 @@ export async function cancelSeat(input: z.input<typeof cancelSeatSchema>): Promi
         },
       });
       if (!booking) throw new Error("Booking not found.");
+      // Re-pricing a booking whose Razorpay order is already open would leave
+      // the order and the booking quoting different totals.
+      assertNotInCheckout(booking);
 
       const traveller = booking.travellers.find((t) => t.id === travellerId);
       if (!traveller) throw new Error("That traveller isn't on this booking.");
@@ -430,6 +497,29 @@ const detailsSchema = z.object({
   bookingId: z.string().uuid(),
   source: z.enum(["WEB", "ADMIN_OFFLINE", "WHATSAPP", "FESTIVAL"]),
   internalNotes: z.string().trim().max(2000).optional().or(z.literal("")),
+  /**
+   * Editable, now that it has a column of its own.
+   *
+   * It was made read-only when the two notes shared one field, because
+   * saving the team's note wiped whatever the customer had written. They
+   * are separate columns now, so an admin taking a request over the phone
+   * can record it where the customer's own words live — deliberately, in a
+   * box that says whose they are.
+   */
+  customerNotes: z.string().trim().max(1000).optional().or(z.literal("")),
+  /**
+   * One contact for the whole party, which is how checkout asks for it.
+   * Stored on the lead traveller and cleared from the rest, so there is
+   * only ever one answer to "who do we call".
+   */
+  emergencyContactName: z.string().trim().max(120).optional().or(z.literal("")),
+  emergencyContactPhone: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || isValidPhone(v), "Enter a 10-digit emergency number")
+    .transform(toNationalDigits)
+    .optional()
+    .or(z.literal("")),
   travellers: z
     .array(
       z.object({
@@ -461,7 +551,10 @@ export async function updateBookingDetails(
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Check the details." };
   }
-  const { bookingId, source, internalNotes, travellers } = parsed.data;
+  const {
+    bookingId, source, internalNotes, customerNotes,
+    emergencyContactName, emergencyContactPhone, travellers,
+  } = parsed.data;
 
   try {
     const slug = await prisma.$transaction(async (tx) => {
@@ -473,15 +566,29 @@ export async function updateBookingDetails(
 
       await tx.booking.update({
         where: { id: booking.id },
-        data: { source, internalNotes: internalNotes || null },
+        data: {
+          source,
+          internalNotes: internalNotes || null,
+          customerNotes: customerNotes || null,
+        },
       });
 
-      for (const t of travellers) {
+      for (const [i, t] of travellers.entries()) {
         await tx.bookingTraveller.update({
           where: { id: t.id },
           // Scoped by booking id as well, so a tampered form can't rewrite a
           // traveller that belongs to somebody else's booking.
-          data: { fullName: t.fullName, phone: t.phone || null, email: t.email || null },
+          data: {
+            fullName: t.fullName,
+            phone: t.phone || null,
+            email: t.email || null,
+            // Written to the lead and cleared from everyone else. Otherwise
+            // an edit leaves a second copy behind on a traveller the form no
+            // longer shows it against, and the panel reads whichever it
+            // finds first.
+            emergencyContactName: i === 0 ? emergencyContactName || null : null,
+            emergencyContactPhone: i === 0 ? emergencyContactPhone || null : null,
+          },
         });
       }
 
@@ -556,9 +663,19 @@ export async function refundBooking(
 
   const booking = await prisma.booking.findUnique({
     where: { reference: data.reference },
-    select: { id: true, trip: { select: { slug: true } } },
+    select: { id: true, status: true, holdExpiresAt: true, trip: { select: { slug: true } } },
   });
   if (!booking) return { ok: false, error: "That booking no longer exists." };
+  // requestRefund reports rather than throws, so this one is caught here.
+  if (checkoutInFlight(booking)) {
+    return {
+      ok: false,
+      error:
+        `Someone is paying for this booking right now — nothing has settled yet, so there ` +
+        `is nothing to send back. Their hold lapses in ` +
+        `${checkoutMinutesLeft(booking.holdExpiresAt)} minute(s).`,
+    };
+  }
 
   try {
     const { requestRefund } = await import("@/lib/payments/refunds");
@@ -699,7 +816,7 @@ export async function carryBookingForward(
       const booking = await tx.booking.findUnique({
         where: { reference: d.reference },
         select: {
-          id: true, status: true, seats: true, profileId: true,
+          id: true, status: true, holdExpiresAt: true, seats: true, profileId: true,
           amountPaidPaise: true, refundedPaise: true,
           trip: { select: { id: true, slug: true } },
           // Money Razorpay has been asked for but hasn't confirmed yet.
@@ -710,6 +827,7 @@ export async function carryBookingForward(
         },
       });
       if (!booking) throw new Error("That booking no longer exists.");
+      assertNotInCheckout(booking);
       /**
        * Was a check for CARRIED_FORWARD alone, which only held while the
        * booking sat still: setting it back to Confirmed and carrying it
@@ -848,7 +966,8 @@ export async function recordOfflineRefund(
       const booking = await tx.booking.findUnique({
         where: { reference: d.reference },
         select: {
-          id: true, amountPaidPaise: true, refundedPaise: true,
+          id: true, status: true, holdExpiresAt: true,
+          amountPaidPaise: true, refundedPaise: true,
           trip: { select: { slug: true } },
           payments: {
             where: { status: "CAPTURED" },
@@ -861,6 +980,7 @@ export async function recordOfflineRefund(
         },
       });
       if (!booking) throw new Error("SAFE:That booking no longer exists.");
+      assertNotInCheckout(booking);
 
       /**
        * NOT blocked while a Razorpay refund is pending, unlike requestRefund.

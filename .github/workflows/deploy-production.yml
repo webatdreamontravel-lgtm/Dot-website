@@ -1,0 +1,379 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+    inputs:
+      skip_migrations:
+        description: "Skip `prisma migrate deploy` (use only if migrations were applied out-of-band)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & upload to S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      s3_key: ${{ steps.upload.outputs.s3_key }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive release id
+        id: release
+        run: |
+          echo "release_id=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Write .env from secret
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          umask 077
+          cat > .env <<'DOT_ENV_EOF'
+          ${{ secrets.PRODUCTION_ENV }}
+          DOT_ENV_EOF
+
+          sed -i 's/\r$//' .env
+
+          echo "NEXT_PUBLIC_RELEASE_SHA=$RELEASE_ID" >> .env
+
+          echo "· .env lines            : $(wc -l < .env | tr -d ' ')"
+          echo "· keys found            : $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '=' | tr '\n' ' ')"
+
+          if ! grep -q '^DATABASE_URL=' .env; then
+            if grep -qE '^[[:space:]]+DATABASE_URL=' .env; then
+              echo "::error::PRODUCTION_ENV has DATABASE_URL but its lines are INDENTED. Re-paste the secret with every line starting at column 0."
+            elif [ ! -s .env ] || [ "$(grep -c '^[A-Za-z_]' .env)" -le 1 ]; then
+              echo "::error::The PRODUCTION_ENV secret appears to be empty or unset. Add it under Settings → Secrets and variables → Actions."
+            elif grep -q 'DATABASE_URL' .env; then
+              echo "::error::PRODUCTION_ENV mentions DATABASE_URL but not as a line of its own — check for a stray prefix such as 'export '."
+            else
+              echo "::error::PRODUCTION_ENV secret has no DATABASE_URL. It must contain the full .env, one KEY=value per line."
+            fi
+            exit 1
+          fi
+
+          grep -q '^DIRECT_URL=' .env || { echo "::error::PRODUCTION_ENV secret has no DIRECT_URL"; exit 1; }
+          echo "Loaded $(grep -c '^[A-Za-z_]' .env) variables."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply database migrations
+        if: ${{ inputs.skip_migrations != true }}
+        run: npx prisma migrate deploy
+
+      - name: Build
+        run: npx next build
+
+      - name: Assemble release bundle
+        run: |
+          set -euo pipefail
+          test -d .next/standalone || { echo "::error::.next/standalone missing — is output:'standalone' set in next.config.ts?"; exit 1; }
+
+          rm -rf bundle && mkdir -p bundle
+          cp -r .next/standalone/. bundle/
+          mkdir -p bundle/.next
+          cp -r .next/static bundle/.next/static
+          [ -d public ] && cp -r public bundle/public
+
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('bundle/package.json', 'utf8'));
+            pkg.scripts = { start: 'HOSTNAME=\${HOSTNAME_BIND:-0.0.0.0} node server.js' };
+            delete pkg.devDependencies;
+            fs.writeFileSync('bundle/package.json', JSON.stringify(pkg, null, 2));
+          "
+
+          rm -f bundle/.env bundle/.env.local
+
+          tar -czf release.tar.gz -C bundle .
+          echo "Bundle: $(du -sh release.tar.gz | cut -f1)"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload release to S3
+        id: upload
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          [ -n "$S3_BUCKET" ] || { echo "::error::S3_BUCKET is empty"; exit 1; }
+          KEY="releases/${RELEASE_ID}.tar.gz"
+
+          aws s3 cp release.tar.gz "s3://${S3_BUCKET}/${KEY}" \
+            --no-progress \
+            --metadata "commit=${GITHUB_SHA},run=${GITHUB_RUN_ID},ref=${GITHUB_REF_NAME}"
+
+          echo "$KEY" > latest.txt
+          aws s3 cp latest.txt "s3://${S3_BUCKET}/releases/latest.txt" --no-progress
+
+          echo "s3_key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Uploaded s3://${S3_BUCKET}/${KEY}"
+
+  deploy:
+    name: Release to EC2
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Presign the release URL
+        id: presign
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'dot-prod-builds' }}
+          S3_KEY: ${{ needs.build.outputs.s3_key }}
+        run: |
+          set -euo pipefail
+          [ -n "$S3_BUCKET" ] || { echo "::error::S3_BUCKET is empty"; exit 1; }
+          URL="$(aws s3 presign "s3://${S3_BUCKET}/${S3_KEY}" --expires-in 3600)"
+          echo "::add-mask::$URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.EC2_HOST }}
+          SSH_PORT: ${{ vars.EC2_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_KEY" \
+            | tr -d '\r' \
+            | sed -e '/./,$!d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          if [ -z "$(tr -d '[:space:]' < ~/.ssh/deploy_key)" ]; then
+            echo "::error::EC2_SSH_PRIVATE_KEY is empty — the secret is not set, or not visible to this job. It must be a REPOSITORY secret (Settings → Secrets and variables → Actions → Secrets → Repository secrets), not an Environment secret."
+            exit 1
+          fi
+
+          if ! ssh-keygen -y -P '' -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            first="$(grep -m1 . ~/.ssh/deploy_key || true)"
+            last="$(grep . ~/.ssh/deploy_key | tail -1 || true)"
+            lines="$(grep -c . ~/.ssh/deploy_key || true)"
+            echo "· first line: ${first:0:40}"
+            echo "· last line : ${last:0:40}"
+            echo "· lines     : $lines"
+
+            if [ "$lines" -le 2 ] && printf '%s' "$first" | grep -q "BEGIN.*PRIVATE KEY"; then
+              echo "::error::The key is on a single line — its line breaks were lost when pasting. Re-copy it with 'cat key.pem' and paste so BEGIN, the body, and END are on separate lines."
+              exit 1
+            fi
+
+            case "$first" in
+              *"PuTTY-User-Key-File"*)
+                echo "::error::That is a PuTTY .ppk key. Convert it: PuTTYgen → Load → Conversions → Export OpenSSH key." ;;
+              "ssh-rsa "*|"ssh-ed25519 "*|"ecdsa-sha2-"*)
+                echo "::error::That is the PUBLIC key. EC2_SSH_PRIVATE_KEY needs the private half — the file WITHOUT the .pub extension." ;;
+              *"BEGIN"*"PRIVATE KEY"*)
+                if grep -qE 'Proc-Type:.*ENCRYPTED|DEK-Info:' ~/.ssh/deploy_key; then
+                  echo "::error::The key is PASSPHRASE-PROTECTED. Strip it with: ssh-keygen -p -P '<current>' -N '' -f key.pem — then re-paste."
+                elif ! grep -q 'END.*PRIVATE KEY' ~/.ssh/deploy_key; then
+                  echo "::error::The key is TRUNCATED — no -----END … PRIVATE KEY----- line. Re-copy the whole file; the last line is easy to miss when selecting."
+                else
+                  echo "::error::Header and footer are present but the body will not parse. Re-copy with 'pbcopy < key.pem' (or 'xclip -sel c < key.pem') rather than selecting text, which can drop or alter characters." ;
+                fi ;;
+              *)
+                echo "::error::EC2_SSH_PRIVATE_KEY does not look like a private key. Paste the whole file including the -----BEGIN/END----- lines." ;;
+            esac
+            exit 1
+          fi
+          echo "· key type  : $(ssh-keygen -l -f ~/.ssh/deploy_key | awk '{print $4, $2}')"
+
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::EC2_KNOWN_HOSTS is not set; trusting the host key on first sight. See docs/DEPLOYMENT.md to pin it."
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<SSH_CONFIG_EOF
+          Host target
+            HostName $SSH_HOST
+            Port $SSH_PORT
+            User ${{ vars.EC2_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            BatchMode yes
+            ConnectTimeout 15
+            ServerAliveInterval 30
+          SSH_CONFIG_EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Ship .env to the instance
+        env:
+          ENV_PATH: ${{ vars.EC2_ENV_PATH || '~/.dot-production.env' }}
+          RELEASE_ID: ${{ needs.build.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          cat > production.env <<'DOT_ENV_EOF'
+          ${{ secrets.PRODUCTION_ENV }}
+          DOT_ENV_EOF
+          echo "NEXT_PUBLIC_RELEASE_SHA=$RELEASE_ID" >> production.env
+
+          scp production.env "target:$ENV_PATH"
+          ssh target "chmod 600 $ENV_PATH && echo \"  .env staged: \$(grep -c '^[A-Za-z_]' $ENV_PATH) variables\""
+
+          rm -f production.env
+
+      - name: Deploy
+        env:
+          APP_DIR: ${{ vars.EC2_APP_DIR }}
+          PM2_APP_NAME: ${{ vars.PM2_APP_NAME }}
+          APP_PORT: ${{ vars.APP_PORT || '3000' }}
+          ENV_PATH: ${{ vars.EC2_ENV_PATH || '~/.dot-production.env' }}
+          RELEASE_URL: ${{ steps.presign.outputs.url }}
+          RELEASE_ID: ${{ needs.build.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          ssh target \
+            "APP_DIR='$APP_DIR' PM2_APP_NAME='$PM2_APP_NAME' APP_PORT='$APP_PORT' ENV_PATH='$ENV_PATH' RELEASE_URL='$RELEASE_URL' RELEASE_ID='$RELEASE_ID' bash -s" <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
+
+          log()  { printf '\n==> %s\n' "$*"; }
+          fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+          if ! command -v pm2 >/dev/null 2>&1; then
+            [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+            export PATH="$PATH:/usr/local/bin:/usr/bin:$HOME/.npm-global/bin"
+          fi
+          command -v pm2  >/dev/null 2>&1 || fail "pm2 is not on PATH for this SSH session. See docs/DEPLOYMENT.md."
+          command -v node >/dev/null 2>&1 || fail "node is not on PATH for this SSH session."
+
+          pm2 describe "$PM2_APP_NAME" >/dev/null 2>&1 \
+            || fail "No PM2 process named '$PM2_APP_NAME'. Check \`pm2 list\` and the PM2_APP_NAME variable."
+
+          STAGE="${APP_DIR}.incoming"
+          BACKUP="${APP_DIR}.previous"
+
+          log "Downloading release $RELEASE_ID"
+          TARBALL="$(mktemp /tmp/dot-release-XXXXXX.tar.gz)"
+          trap 'rm -f "$TARBALL"' EXIT
+
+          curl --fail --silent --show-error --location \
+               --retry 3 --retry-delay 2 --retry-connrefused --max-time 300 \
+               --output "$TARBALL" "$RELEASE_URL" \
+            || fail "Download failed. The presigned URL may have expired (they last 1h)."
+
+          log "Unpacking to $STAGE"
+          rm -rf "$STAGE"; mkdir -p "$STAGE"
+          tar -xzf "$TARBALL" -C "$STAGE" || fail "Tarball is corrupt."
+          [ -f "$STAGE/server.js" ] || fail "Bundle has no server.js — the build did not produce a standalone output."
+
+          ENV_PATH="${ENV_PATH/#\~/$HOME}"
+
+          if [ -f "$ENV_PATH" ]; then
+            cp "$ENV_PATH" "$STAGE/.env"
+          elif [ -f "$APP_DIR/.env" ]; then
+            echo "    staged env not found at $ENV_PATH — carrying the existing .env forward"
+            cp "$APP_DIR/.env" "$STAGE/.env"
+          else
+            fail "No .env available: nothing at $ENV_PATH and no $APP_DIR/.env to fall back on. The app would start with no database credentials."
+          fi
+          chmod 600 "$STAGE/.env"
+
+          for keep in ecosystem.config.js ecosystem.config.cjs ecosystem.json .env.local; do
+            [ -e "$APP_DIR/$keep" ] && cp -a "$APP_DIR/$keep" "$STAGE/$keep" && echo "    carried over: $keep"
+          done
+
+          log "Activating $RELEASE_ID"
+          rm -rf "$BACKUP"
+          [ -d "$APP_DIR" ] && mv "$APP_DIR" "$BACKUP"
+          mv "$STAGE" "$APP_DIR"
+
+          log "Reloading PM2 process '$PM2_APP_NAME'"
+          RELOADED_AT="$(date '+%Y-%m-%dT%H:%M:%S')"
+          pm2 reload "$PM2_APP_NAME" || fail "PM2 reload failed. Check: pm2 logs $PM2_APP_NAME --lines 100"
+
+          log "Waiting for http://127.0.0.1:$APP_PORT/api/health (up to 90s)"
+          healthy=0
+          deadline=$(( $(date +%s) + 90 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+                    "http://127.0.0.1:$APP_PORT/api/health" || true)"
+            [ "$code" = "200" ] && { healthy=1; break; }
+            sleep 3
+          done
+
+          if [ "$healthy" -ne 1 ]; then
+            printf '\n==> Health check FAILED (last status: %s)\n' "${code:-no response}" >&2
+            echo "--- PM2 log tail. This file keeps HISTORY: ignore anything stamped" >&2
+            echo "--- before $RELOADED_AT — those lines are from earlier attempts." >&2
+            pm2 logs "$PM2_APP_NAME" --lines 60 --nostream 2>&1 \
+              | awk -v t="$RELOADED_AT" '{ print } END { print "--- end of tail (entries at or after " t " are from THIS deploy) ---" }' >&2 || true
+
+            if [ -d "$BACKUP" ]; then
+              log "Rolling back"
+              rm -rf "$APP_DIR"
+              mv "$BACKUP" "$APP_DIR"
+              pm2 reload "$PM2_APP_NAME" || true
+              fail "Deploy failed health check; rolled back to the previous release."
+            fi
+            fail "Deploy failed health check and there is no previous directory to roll back to."
+          fi
+
+          log "Healthy. $RELEASE_ID is live."
+
+          pm2 save --force >/dev/null 2>&1 || true
+
+          log "Deploy complete: $RELEASE_ID"
+          REMOTE_SCRIPT
+
+      - name: Verify the public site
+        if: ${{ vars.SITE_URL != '' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          RELEASE_ID: ${{ needs.build.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS --max-time 20 "${SITE_URL%/}/api/health")" || {
+            echo "::warning::Could not reach ${SITE_URL%/}/api/health from GitHub. The app is healthy on the instance; check your security group / reverse proxy."
+            exit 0
+          }
+          echo "$body"
+          echo "$body" | grep -q "$RELEASE_ID" \
+            || echo "::warning::Public health endpoint did not report release $RELEASE_ID — a cache or proxy may be serving a stale response."
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config production.env

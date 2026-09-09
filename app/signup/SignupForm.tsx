@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { AlertCircle, Loader2, MailCheck } from "lucide-react";
 
 import { AuthShell } from "@/components/auth/AuthShell";
 import { Combobox, LockedField, RadioGroup, TextField } from "@/components/auth/fields";
+import { ResendCodeButton } from "@/components/auth/ResendCodeButton";
 import { DEFAULT_STATE, TAMIL_NADU_CITIES } from "@/lib/data/indianStates";
 import { latestBirthDateFor } from "@/lib/dates";
 import {
@@ -17,6 +18,7 @@ import {
 /** Kept in step with MIN_AGE in the signup action. */
 const MIN_SIGNUP_AGE = 18;
 import {
+  checkEmailAvailability,
   resendVerification,
   signUp,
   verifySignupOtp,
@@ -30,12 +32,50 @@ export function SignupForm({ next }: { next: string }) {
   const [state, submit, pending] = useActionState(signUp, initial);
   const [resent, resendAction, resending] = useActionState(resendVerification, initial);
 
+  const [emailTaken, setEmailTaken] = useState(false);
+  const [checkingEmail, setCheckingEmail] = useState(false);
+  // Blur can fire faster than the lookups resolve. Only the newest answer is
+  // allowed to win, or a slow reply about an old address overwrites a fast
+  // one about the address actually in the box.
+  const checkSeq = useRef(0);
+
+  async function checkEmail(e: React.FocusEvent<HTMLInputElement>) {
+    const value = e.currentTarget.value.trim();
+    setEmailTaken(false);
+    if (!value) return;
+
+    const seq = ++checkSeq.current;
+    setCheckingEmail(true);
+    try {
+      const { taken } = await checkEmailAvailability(value);
+      if (seq === checkSeq.current) setEmailTaken(taken);
+    } catch {
+      // Advisory only. A failed check must never look like a taken address,
+      // and must never stand between someone and an account — signUp()
+      // re-checks server-side anyway.
+    } finally {
+      if (seq === checkSeq.current) setCheckingEmail(false);
+    }
+  }
+
   if (state.status === "sent") {
     return <VerifyStep email={state.email} next={next} onResend={resendAction} resending={resending} resent={resent} />;
   }
 
   const err = state.fieldErrors ?? {};
   const val = state.values ?? {};
+
+  // One alert at the top of the form carries the whole explanation; the email
+  // input is only tinted. A message sitting under a field two thirds of the
+  // way down a long form is easy to scroll past, and this one has the links
+  // out of the dead end in it.
+  //
+  // A server error wins over the live check: it is the newer, authoritative
+  // answer, and it may be about something else entirely.
+  const serverError = state.status === "error" ? state.error : undefined;
+  const topError =
+    serverError ?? (emailTaken ? "An account already exists with this email address." : undefined);
+  const showAccountLinks = Boolean(state.existingAccount || (!serverError && emailTaken));
 
   return (
     <AuthShell
@@ -54,13 +94,36 @@ export function SignupForm({ next }: { next: string }) {
       <form action={submit} noValidate className="flex flex-col gap-5">
         <input type="hidden" name="next" value={next} />
 
-        {state.status === "error" && state.error && (
+        {topError && (
           <p
             role="alert"
             className="flex items-start gap-2 rounded-xl border border-coral/30 bg-coral/[0.07] px-3.5 py-2.5 text-[0.87rem] leading-relaxed text-navy"
           >
             <AlertCircle className="mt-0.5 h-4 w-4 flex-none text-coral" />
-            {state.error}
+            <span>
+              {topError}
+              {/* The whole point of naming the collision is giving them the
+                  way out of it, so the links go in the message itself. */}
+              {showAccountLinks && (
+                <>
+                  {" "}
+                  <Link
+                    href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"}
+                    className="font-medium underline underline-offset-4 hover:text-navy"
+                  >
+                    Sign in
+                  </Link>{" "}
+                  instead, or{" "}
+                  <Link
+                    href="/reset-password"
+                    className="font-medium underline underline-offset-4 hover:text-navy"
+                  >
+                    reset your password
+                  </Link>
+                  .
+                </>
+              )}
+            </span>
           </p>
         )}
 
@@ -73,6 +136,40 @@ export function SignupForm({ next }: { next: string }) {
             defaultValue={val.fullName}
             error={err.fullName}
             className="sm:col-span-2"
+          />
+          <TextField
+            name="email"
+            label="Email address"
+            type="email"
+            placeholder="you@example.com"
+            autoComplete="email"
+            defaultValue={val.email ?? state.email}
+            // Checked as soon as they leave the field, not on submit.
+            onBlur={checkEmail}
+            // Any edit invalidates the previous answer, so the stale "already
+            // taken" doesn't sit under an address they've since corrected.
+            onInput={() => setEmailTaken(false)}
+            hint={checkingEmail ? "Checking…" : undefined}
+            error={err.email}
+            // Tinted, but silent: the explanation is in the alert at the top.
+            invalid={emailTaken}
+          />
+          <TextField
+            name="phone"
+            label="Phone number"
+            type="tel"
+            inputMode="numeric"
+            prefix={PHONE_COUNTRY_CODE}
+            maxLength={PHONE_NATIONAL_DIGITS}
+            placeholder="98765 43210"
+            autoComplete="tel"
+            defaultValue={val.phone}
+            error={err.phone}
+            // Uncontrolled, so the strip happens on the element itself.
+            onInput={(e) => {
+              const el = e.currentTarget;
+              el.value = sanitisePhoneInput(el.value);
+            }}
           />
           <TextField
             name="dateOfBirth"
@@ -95,35 +192,6 @@ export function SignupForm({ next }: { next: string }) {
             ]}
             defaultValue={val.gender}
             error={err.gender}
-          />
-        </Group>
-
-        <Group label="How we reach you">
-          <TextField
-            name="email"
-            label="Email address"
-            type="email"
-            placeholder="you@example.com"
-            autoComplete="email"
-            defaultValue={val.email ?? state.email}
-            error={err.email}
-          />
-          <TextField
-            name="phone"
-            label="Phone number"
-            type="tel"
-            inputMode="numeric"
-            prefix={PHONE_COUNTRY_CODE}
-            maxLength={PHONE_NATIONAL_DIGITS}
-            placeholder="98765 43210"
-            autoComplete="tel"
-            defaultValue={val.phone}
-            error={err.phone}
-            // Uncontrolled, so the strip happens on the element itself.
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.value = sanitisePhoneInput(el.value);
-            }}
           />
         </Group>
 
@@ -156,7 +224,11 @@ export function SignupForm({ next }: { next: string }) {
 
         <button
           type="submit"
-          disabled={pending}
+          // Blocked while the address is known to be taken. Safe to gate on
+          // because emailTaken is cleared the moment the field is edited — so
+          // correcting the address re-enables the button immediately, and a
+          // stale "taken" can never leave someone stuck with no way forward.
+          disabled={pending || emailTaken}
           className="btn btn-primary mt-1 w-full justify-center disabled:opacity-70"
         >
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -254,13 +326,10 @@ function VerifyStep({
         <input type="hidden" name="next" value={next} />
         <p className="text-[0.85rem] text-navy/55">
           Nothing after a minute? Check spam, or{" "}
-          <button
-            type="submit"
-            disabled={resending}
-            className="font-medium underline underline-offset-4 hover:text-navy disabled:opacity-50"
-          >
-            {resending ? "sending…" : "send a new code"}
-          </button>
+          <ResendCodeButton
+            pending={resending}
+            className="font-medium underline underline-offset-4 hover:text-navy disabled:no-underline disabled:opacity-50"
+          />
           .
         </p>
         {resent.status === "sent" && (

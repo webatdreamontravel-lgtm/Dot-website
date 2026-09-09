@@ -514,7 +514,7 @@ export function NewBookingForm({
                 <option value="CONFIRMED">Confirmed</option>
               </select>
             </Field>
-            <Field label="Internal notes" className="sm:col-span-2">
+            <Field label="Admin notes" className="sm:col-span-2">
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={control} />
             </Field>
           </div>

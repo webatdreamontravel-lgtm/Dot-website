@@ -151,7 +151,8 @@ export async function createBookingRequest(
           tcsPaise: price.tcsPaise,
           totalPaise: price.totalPaise,
           amountPaidPaise: 0,
-          internalNotes: data.notes || null,
+          // The customer's words, kept where the team can't overwrite them.
+          customerNotes: data.notes || null,
           travellers: {
             create: data.travellers.map((t, i) => ({
               fullName: t.fullName,

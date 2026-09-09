@@ -12,7 +12,7 @@ import {
 } from "@/lib/queries/admin";
 import { formatINR } from "@/lib/utils";
 import { creditBalance, creditHistory, type CreditEntryRow } from "@/lib/credit/ledger";
-import { BOOKING_TONE, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../ui";
+import { BOOKING_TONE, bookingTone, Chip, EmptyState, PAYMENT_TONE, Panel } from "../../ui";
 import { FilterBar, FilterField, FilterSelect, filterInputClass } from "../../FilterBar";
 import { Pagination } from "../../Pagination";
 import { Tabs } from "../../Tabs";
@@ -301,7 +301,7 @@ async function BookingsTab({
                   </thead>
                   <tbody>
                     {rows.map((b) => {
-                      const status = BOOKING_TONE[b.status] ?? { tone: "mute", label: b.status };
+                      const status = bookingTone(b);
                       const pay = PAYMENT_TONE[b.paymentState];
                       return (
                         <tr key={b.id} className="hover:bg-[#fafbfd]">

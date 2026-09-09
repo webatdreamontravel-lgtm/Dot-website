@@ -269,7 +269,8 @@ export async function createPaymentOrder(input: {
           amountPaidPaise: 0,
           holdExpiresAt,
           pendingHoldId: holdId,
-          internalNotes: input.notes || null,
+          // From the checkout form — see customerNotes on the model.
+          customerNotes: input.notes || null,
           travellers: {
             create: travellers.map((t, i) => ({
               fullName: t.fullName,

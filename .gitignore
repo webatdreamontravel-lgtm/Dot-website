@@ -44,6 +44,8 @@ next-env.d.ts
 .vercel
 .netlify
 
+/bundle/
+/release.tar.gz
 # ── OS noise ──
 .DS_Store
 Thumbs.db
