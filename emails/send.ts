@@ -20,7 +20,9 @@ import { activeProvider, deliver } from "./providers";
 const from = process.env.EMAIL_FROM ?? "Dream On Travel <onboarding@resend.dev>";
 
 
-export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
+export type SendResult =
+  | { ok: true; id: string | null; deduped?: boolean }
+  | { ok: false; error: string };
 
 export async function sendEmail({
   to,
