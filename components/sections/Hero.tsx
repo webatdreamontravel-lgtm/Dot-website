@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight, Play, MoveDown } from "lucide-react";
 import { motion, type Variants } from "framer-motion";
 import { GrainOverlay } from "@/components/shared/GrainOverlay";
+import { HeroVideo } from "@/components/sections/HeroVideo";
 import { Marquee } from "@/components/shared/Marquee";
 
 const HEADING_LINES = [
@@ -30,7 +31,15 @@ export function Hero() {
       aria-label="Hero"
       className="relative isolate overflow-hidden text-cream min-h-[100svh] flex flex-col"
     >
+      {/*
+        Paint order is the fallback story. The mesh gradient is the floor, so
+        a montage that is skipped, blocked or still loading degrades to the
+        background this hero has always had rather than to a black rectangle.
+        Footage on top of it, scrim on top of that, then grain and vignette.
+      */}
       <div aria-hidden className="absolute inset-0 mesh-gradient" />
+      <HeroVideo />
+      <div aria-hidden className="absolute inset-0 hero-scrim" />
       <GrainOverlay opacity={0.08} />
       {/* subtle vignette */}
       <div

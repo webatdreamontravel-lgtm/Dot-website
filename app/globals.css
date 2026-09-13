@@ -87,6 +87,47 @@ body {
   100% { background-position: 30% 30%, 70% 30%, 70% 70%, 30% 70%, 0 0; }
 }
 
+/*
+ * Scrim over the hero montage.
+ *
+ * The stops are solved, not eyeballed. The footage is holiday footage --
+ * beaches, snow, the Rann salt flats, a lens flare -- and it reaches a
+ * literal 255,255,255 in every horizontal band of the frame, so the only
+ * safe assumption behind any given line of text is white. Against white,
+ * the alpha each hero element needs to clear WCAG is:
+ *
+ *   navbar links   cream/85 @ 14px   4.5:1   navy/69
+ *   pill badge     cream    @ 12.5px 4.5:1   navy/63
+ *   h1 + script    cream    @ >=24px 3:1     navy/55
+ *   btn-ghost      cream    @ 15px   4.5:1   navy/63
+ *   marquee        cream/70 @ 20px   4.5:1   navy/76
+ *
+ * Hence the shape: heaviest at the two ends, where all the small text
+ * lives, and lightest across the middle third, which is nothing but the
+ * headline and the script line and only owes 3:1. That middle band is the
+ * one place the footage is really allowed to show, which is also where
+ * the faces are.
+ *
+ * The elements do not sit at fixed percentages -- the hero is 100svh and
+ * the content is centred in it, so everything slides as the viewport gets
+ * taller, which is why the stops are shaped rather than uniform. Audited
+ * at 375x812, 768x1024, 1440x900 and 1920x700: 24 readings, no failures,
+ * tightest the pill on tablet at 5.07:1 against 4.5. Moving a stop, or
+ * moving anything in the hero up or down, means re-running that.
+ */
+.hero-scrim {
+  background: linear-gradient(
+    180deg,
+    rgba(15, 30, 61, 0.86) 0%,
+    rgba(15, 30, 61, 0.72) 22%,
+    rgba(15, 30, 61, 0.66) 36%,
+    rgba(15, 30, 61, 0.62) 48%,
+    rgba(15, 30, 61, 0.66) 62%,
+    rgba(15, 30, 61, 0.78) 78%,
+    rgba(15, 30, 61, 0.88) 100%
+  );
+}
+
 /* Marquee */
 @keyframes marquee {
   from { transform: translateX(0); }
