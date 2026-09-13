@@ -20,7 +20,15 @@ import { activeProvider, deliver } from "./providers";
 const from = process.env.EMAIL_FROM ?? "Dream On Travel <onboarding@resend.dev>";
 
 
-export type SendResult = { ok: true; id: string | null } | { ok: false; error: string };
+/**
+ * `deduped` marks the short-circuit below: the dedupe key already had a
+ * non-FAILED log row, so nothing was sent and there is no provider id to
+ * return. Optional because the ordinary success path does not set it, and
+ * `true` rather than `boolean` so `if (result.deduped)` narrows.
+ */
+export type SendResult =
+  | { ok: true; id: string | null; deduped?: true }
+  | { ok: false; error: string };
 
 export async function sendEmail({
   to,
