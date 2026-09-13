@@ -7,6 +7,11 @@ import { sendEmail, signInCodeEmail } from "@/emails";
 import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import {
+  consumeAuthAttempt,
+  consumeEmailSend,
+  tooManyRequests,
+} from "@/lib/rateLimit";
 
 export type LoginState = {
   email: string;
@@ -57,6 +62,9 @@ export async function signInWithPassword(
     return { email, error: "Enter your email and password." };
   }
 
+  const limited = await consumeAuthAttempt(email);
+  if (!limited.ok) return { email, error: tooManyRequests(limited) };
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -96,6 +104,11 @@ export async function sendSignInCode(
   if (!EMAIL_RE.test(email)) {
     return { email, error: "That doesn't look like an email address." };
   }
+
+  // Before anything that costs: every call past here mints a code and sends
+  // a real email.
+  const limited = await consumeEmailSend(email);
+  if (!limited.ok) return { email, error: tooManyRequests(limited) };
 
   // MUST come before generateLink. `type: "magiclink"` CREATES the user when
   // the address is unknown — it does not error the way "recovery" does — so
@@ -169,6 +182,10 @@ export async function verifySignInCode(
   if (token.length < 6 || token.length > 10) {
     return { email, codeSent: true, error: "Enter the code from your email." };
   }
+
+  // An 8-digit code is brute-forceable given unlimited guesses.
+  const limited = await consumeAuthAttempt(email);
+  if (!limited.ok) return { email, codeSent: true, error: tooManyRequests(limited) };
 
   const supabase = await createClient();
   const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "email" });

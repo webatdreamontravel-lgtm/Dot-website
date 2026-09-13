@@ -8,6 +8,11 @@ import { passwordResetEmail, sendEmail } from "@/emails";
 import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import {
+  consumeAuthAttempt,
+  consumeEmailSend,
+  tooManyRequests,
+} from "@/lib/rateLimit";
 
 /**
  * Forgotten-password reset, by emailed code.
@@ -55,6 +60,10 @@ export async function requestPasswordReset(
   if (!EMAIL_RE.test(email)) {
     return { step: "request", email, fieldErrors: { email: "Enter your email address." } };
   }
+
+  // Before generateLink and the send — a refused caller must cost no email.
+  const limited = await consumeEmailSend(email);
+  if (!limited.ok) return { step: "request", email, error: tooManyRequests(limited) };
 
   const profile = await prisma.profile.findUnique({
     where: { email },
@@ -142,6 +151,11 @@ export async function completePasswordReset(
     }
     return { step: "code", email, fieldErrors };
   }
+
+  // Counted only once the input is well-formed, so a typo'd password does not
+  // burn an attempt against the code.
+  const limited = await consumeAuthAttempt(email);
+  if (!limited.ok) return { step: "code", email, error: tooManyRequests(limited) };
 
   const supabase = await createClient();
 

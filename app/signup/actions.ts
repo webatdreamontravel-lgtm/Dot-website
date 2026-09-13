@@ -10,6 +10,13 @@ import { verificationEmail } from "@/emails";
 import { prisma } from "@/lib/prisma";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import {
+  clientIp,
+  consume,
+  consumeEmailSend,
+  LIMITS,
+  tooManyRequests,
+} from "@/lib/rateLimit";
 import { isValidPhone, toNationalDigits } from "@/lib/phone";
 
 export type SignupState = {
@@ -114,6 +121,19 @@ export async function signUp(_prev: SignupState, formData: FormData): Promise<Si
   }
 
   const { fullName, email, phone, state, city, dateOfBirth, gender, password } = parsed.data;
+
+  // After validation, before generateLink: a form that failed its own checks
+  // sent no email, so it should not burn an attempt either.
+  const limited = await consumeEmailSend(email);
+  if (!limited.ok) {
+    return {
+      status: "error",
+      email,
+      error: tooManyRequests(limited),
+      values: { ...raw, password: "" },
+    };
+  }
+
   const nextPath = sanitiseNext(String(formData.get("next") ?? ""));
   const admin = createAdminClient();
 
@@ -250,6 +270,19 @@ export async function checkEmailAvailability(email: string): Promise<{ taken: bo
     return { taken: false };
   }
 
+  // This endpoint answers "does this address have an account here?" to anyone
+  // who asks, quickly. Capped per IP so it can't be used to walk a list.
+  //
+  // A refused probe returns `taken: false` rather than an error: the check is
+  // advisory, signUp() re-checks server-side, and showing "you may be rate
+  // limited" beside an email field would be nonsense to a real person.
+  const ip = await clientIp();
+  if (ip) {
+    const probe = LIMITS.emailProbe();
+    const limited = await consume("email:probe", ip, probe.limit, probe.windowSec);
+    if (!limited.ok) return { taken: false };
+  }
+
   try {
     const [row] = await prisma.$queryRaw<{ confirmed: boolean }[]>`
       SELECT email_confirmed_at IS NOT NULL AS confirmed
@@ -272,6 +305,10 @@ export async function resendVerification(
   const nextPath = sanitiseNext(String(formData.get("next") ?? ""));
 
   if (!email) return { status: "error", email, error: "Enter your email address." };
+
+  // Before generateLink and the send.
+  const limited = await consumeEmailSend(email);
+  if (!limited.ok) return { status: "error", email, error: tooManyRequests(limited) };
 
   // Guard before generateLink. `type: "magiclink"` CREATES the account when
   // the address is unknown rather than erroring, so without this an
